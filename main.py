@@ -43,7 +43,7 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 test_prompt = "「Discord Botの動作テスト成功です！本番稼働に向けて準備中です。」というメッセージを親しみやすいトーンで短く出力してください。"
 
-ai_response = ai_client.chat.send_message(
+ai_response = ai_client.chats.send_message(
     model="gemini-3.6-flash",
     messages=[{"role": "user", "content": test_prompt}]
 )
