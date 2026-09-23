@@ -41,13 +41,13 @@ for m in messages:
 print("--- [TEST 3] Gemini APIへの動作テスト ---")
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ログは投げずに簡単なテスト指示だけ送る
 test_prompt = "「Discord Botの動作テスト成功です！本番稼働に向けて準備中です。」というメッセージを親しみやすいトーンで短く出力してください。"
 
-ai_response = ai_client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents=test_prompt
+ai_response = ai_client.chat.send_message(
+    model="gemini-3.6-flash",
+    messages=[{"role": "user", "content": test_prompt}]
 )
+
 print("➔ Geminiからの返答受け取り完了")
 print(f"   [生成内容]: {ai_response.text}")
 
