@@ -2,8 +2,8 @@ name: Daily Discord Summary
 
 on:
   schedule:
-    # UTC 15:00 = 日本時間 24:00 (午前0:00)
-    - cron: '0 15 * * *'
+   # 毎日 日本時間 午前4:00（UTC 19:00）に自動実行
+    - cron: '0 19 * * *'
   workflow_dispatch: # 手動実行ボタン
 
 jobs:
