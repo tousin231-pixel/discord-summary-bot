@@ -1,39 +1,44 @@
 import os
-import discord
+import requests
 from google import genai
 from datetime import datetime, timedelta, timezone
 
-# 環境変数から設定値を取得
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "1376909055091671071"))
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "1376909055091671071")
 
+# 1. Discord REST APIを使って過去24時間のメッセージを取得
+headers = {
+    "Authorization": f"Bot {DISCORD_BOT_TOKEN}"
+}
+url = f"https://discord.com/api/v10/channels/{CHANNEL_ID}/messages?limit=100"
+
+response = requests.get(url, headers=headers)
+if response.status_code != 200:
+    print(f"Error fetching messages: {response.status_code}, {response.text}")
+    exit(1)
+
+raw_messages = response.json()
+
+# 過去24時間以内のメッセージのみを抽出
+now = datetime.now(timezone.utc)
+yesterday = now - timedelta(days=1)
+
+messages = []
+for msg in reversed(raw_messages):
+    msg_time = datetime.fromisoformat(msg["timestamp"])
+    if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
+        author_name = msg.get("author", {}).get("username", "Unknown")
+        content = msg.get("content", "")
+        if content:
+            messages.append(f"{author_name}: {content}")
+
+messages_text = "\n".join(messages) if messages else "（過去24時間の新規メッセージはありませんでした）"
+
+# 2. Gemini APIで要約を作成
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-intents = discord.Intents.default()
-intents.message_content = True
-discord_client = discord.Client(intents=intents)
-
-@discord_client.event
-async def on_ready():
-    print(f"Logged in as {discord_client.user}")
-    channel = discord_client.get_channel(CHANNEL_ID)
-    if not channel:
-        print("Channel not found")
-        await discord_client.close()
-        return
-
-    now = datetime.now(timezone.utc)
-    yesterday = now - timedelta(days=1)
-
-    messages = []
-    async for msg in channel.history(limit=200, after=yesterday):
-        if not msg.author.bot:
-            messages.append(f"{msg.author.display_name}: {msg.content}")
-
-    messages_text = "\n".join(messages) if messages else "（過去24時間の新規メッセージはありませんでした）"
-
-    prompt = f"""
+prompt = f"""
 以下のDiscord「ブルアカ雑談！」チャンネルの会話ログを元に、サーバーメンバー向けのデイリートピックを作成してください。
 
 【コミュニティの前提条件】
@@ -49,13 +54,19 @@ async def on_ready():
 2. 💬 **盛り上がった話題**
 """
 
-    response = ai_client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
-    )
+ai_response = ai_client.models.generate_content(
+    model="gemini-2.5-flash",
+    contents=prompt
+)
 
-    await channel.send(response.text)
+# 3. Discordに要約を送信
+post_url = f"https://discord.com/api/v10/channels/{CHANNEL_ID}/messages"
+payload = {
+    "content": ai_response.text
+}
+post_response = requests.post(post_url, headers=headers, json=payload)
+
+if post_response.status_code in [200, 201]:
     print("Successfully sent summary!")
-    await discord_client.close()
-
-discord_client.run(DISCORD_BOT_TOKEN)
+else:
+    print(f"Error posting summary: {post_response.status_code}, {post_response.text}")
