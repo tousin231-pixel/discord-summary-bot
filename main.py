@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from google import genai
 from datetime import datetime, timedelta, timezone
@@ -43,13 +44,26 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 test_prompt = "「Discord Botの動作テスト成功です！本番稼働に向けて準備中です。」というメッセージを親しみやすいトーンで短く出力してください。"
 
-# 正しいメソッドとモデル指定
-ai_response = ai_client.models.generate_content(
-    model="gemini-3.6-flash",
-    contents=test_prompt
-)
-print("➔ Geminiからの返答受け取り完了")
-print(f"   [生成内容]: {ai_response.text}")
+# 503エラー対策のリトライ処理（最大3回試行）
+ai_response = None
+for attempt in range(1, 4):
+    try:
+        print(f"   Gemini API呼び出し中 (試行 {attempt}/3)...")
+        ai_response = ai_client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=test_prompt
+        )
+        print("➔ Geminiからの返答受け取り完了")
+        print(f"   [生成内容]: {ai_response.text}")
+        break
+    except Exception as e:
+        print(f"⚠️ エラー発生: {e}")
+        if attempt < 3:
+            print("5秒後に再試行します...")
+            time.sleep(5)
+        else:
+            print("❌ リトライ上限に達しました。処理を停止します。")
+            exit(1)
 
 print("--- [TEST 4] Discordへテスト結果を投稿 ---")
 post_url = f"https://discord.com/api/v10/channels/{CHANNEL_ID}/messages"
