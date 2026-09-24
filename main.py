@@ -144,24 +144,32 @@ prompt = f"""
 {logs_body}
 """
 
+# 優先順位付きモデルリスト（メイン ➔ サブ1 ➔ サブ2）
+candidate_models = [
+    "gemini-3.6-flash",       # メイン
+    "gemini-3.5-flash",       # サブ1
+    "gemini-3.5-flash-lite"   # サブ2
+]
+
 ai_response = None
-# 高負荷(503)対策：15秒間隔で最大5回リトライ（約1分15秒粘る）
-for attempt in range(1, 6):
+
+for model_name in candidate_models:
+    print(f"  └ モデル試行中: {model_name}")
     try:
         ai_response = ai_client.models.generate_content(
-            model="gemini-3.6-flash",
+            model=model_name,
             contents=prompt
         )
+        print(f"✨ 要約生成成功！ (使用モデル: {model_name})")
         break
     except Exception as e:
-        print(f"⚠️ APIリトライ中 ({attempt}/5): {e}")
-        if attempt < 5:
-            time.sleep(15)
+        print(f"⚠️ {model_name} でエラーが発生しました: {e}")
+        print("15秒待機後に次の候補モデルへ切り替えます...")
+        time.sleep(15)
 
 if not ai_response:
-    print("❌ 生成に失敗しました。")
+    print("❌ すべての候補モデルで要約生成に失敗しました。")
     exit(1)
-
 print("[5/5] 要約用チャンネル（デイリー要約）へ投稿中...")
 post_url = f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}/messages"
 
