@@ -55,7 +55,7 @@ if guild_id:
 
 event_text = "\n".join(events_summary) if events_summary else "本日開催のイベントはありません。"
 
-# 2. 投票置き場からの投票データ取得
+# 2. 投票置き場からの投票データ取得（テーマ・タイトルのみ抽出）
 poll_summary = []
 poll_res = requests.get(f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=20", headers=headers)
 if poll_res.status_code == 200:
@@ -66,13 +66,13 @@ if poll_res.status_code == 200:
             # Discord標準の投票機能(poll)がある場合
             if "poll" in msg:
                 question = msg["poll"].get("question", {}).get("text", "（無題の投票）")
-                answers = [ans.get("poll_media", {}).get("text", "") for ans in msg["poll"].get("answers", [])]
-                answers_str = " / ".join([a for a in answers if a])
-                poll_summary.append(f"・【投票受付中】「{question}」 (選択肢: {answers_str})")
-            # 標準投票ではないがテキストでメッセージがある場合
+                poll_summary.append(f"・【投票受付中】「{question}」")
+            # テキストでの簡単な呼びかけ・アンケート等の場合
             elif msg.get("content"):
                 author = msg.get("author", {}).get("username", "Unknown")
-                poll_summary.append(f"・{author}: {msg['content']}")
+                # 長すぎるメッセージは冒頭50文字にカット
+                content = msg['content'][:50] + "..." if len(msg['content']) > 50 else msg['content']
+                poll_summary.append(f"・{author}: {content}")
 
 poll_text = "\n".join(poll_summary) if poll_summary else "過去24時間以内に新しく開始された投票はありません。"
 
