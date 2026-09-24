@@ -2,6 +2,6 @@ services:
   - type: cron
     name: discord-daily-summary
     runtime: python
-    schedule: "0 19 * * *"
+    schedule: "0 20 * * *"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
