@@ -145,7 +145,8 @@ prompt = f"""
 """
 
 ai_response = None
-for attempt in range(1, 4):
+# 高負荷(503)対策：15秒間隔で最大5回リトライ（約1分15秒粘る）
+for attempt in range(1, 6):
     try:
         ai_response = ai_client.models.generate_content(
             model="gemini-3.6-flash",
@@ -153,8 +154,9 @@ for attempt in range(1, 4):
         )
         break
     except Exception as e:
-        print(f"⚠️ APIリトライ中 ({attempt}/3): {e}")
-        time.sleep(5)
+        print(f"⚠️ APIリトライ中 ({attempt}/5): {e}")
+        if attempt < 5:
+            time.sleep(15)
 
 if not ai_response:
     print("❌ 生成に失敗しました。")
