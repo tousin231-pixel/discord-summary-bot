@@ -12,6 +12,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TARGET_CHANNEL_ID = "1552352658445181059"
 # 投票置き場チャンネル
 POLL_CHANNEL_ID = "1526389409841152150"
+# フォーラムチャンネル（親ID）
+FORUM_CHANNEL_ID = "1419978214394167296"
 
 # 収集対象のカテゴリ・チャンネル定義
 CHANNELS = {
@@ -39,7 +41,7 @@ headers = {
 now = datetime.now(timezone.utc)
 yesterday = now - timedelta(days=1)
 
-print("[2/5] 本日開催のイベント情報＆投票情報を取得中...")
+print("[2/5] 本日開催のイベント＆投票情報を取得中...")
 # 1. ディスコードイベント取得
 ch_res = requests.get(f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}", headers=headers)
 guild_id = ch_res.json().get("guild_id") if ch_res.status_code == 200 else None
@@ -55,30 +57,27 @@ if guild_id:
 
 event_text = "\n".join(events_summary) if events_summary else "本日開催のイベントはありません。"
 
-# 2. 投票置き場からの投票データ取得（テーマ・タイトルのみ抽出）
+# 2. 投票置き場からの投票データ取得（テーマのみ）
 poll_summary = []
 poll_res = requests.get(f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=20", headers=headers)
 if poll_res.status_code == 200:
     for msg in poll_res.json():
         msg_time = datetime.fromisoformat(msg["timestamp"])
-        # 過去24時間以内に投稿されたメッセージ
         if msg_time >= yesterday:
-            # Discord標準の投票機能(poll)がある場合
             if "poll" in msg:
                 question = msg["poll"].get("question", {}).get("text", "（無題の投票）")
                 poll_summary.append(f"・【投票受付中】「{question}」")
-            # テキストでの簡単な呼びかけ・アンケート等の場合
             elif msg.get("content"):
                 author = msg.get("author", {}).get("username", "Unknown")
-                # 長すぎるメッセージは冒頭50文字にカット
                 content = msg['content'][:50] + "..." if len(msg['content']) > 50 else msg['content']
                 poll_summary.append(f"・{author}: {content}")
 
 poll_text = "\n".join(poll_summary) if poll_summary else "過去24時間以内に新しく開始された投票はありません。"
 
-print("[3/5] 対象11チャンネルから過去24時間のメッセージを収集...")
+print("[3/5] 対象11チャンネル＆フォーラムから過去24時間のメッセージを収集...")
 collected_data = {}
 
+# 通常の11チャンネル収集
 for category_name, ch_dict in CHANNELS.items():
     collected_data[category_name] = {}
     for ch_id, ch_name in ch_dict.items():
@@ -121,6 +120,32 @@ for category_name, ch_dict in CHANNELS.items():
         if messages:
             collected_data[category_name][ch_name] = messages
 
+# --- フォーラムチャンネルのアクティブスレッド収集 ---
+collected_data["フォーラム"] = {}
+forum_threads_res = requests.get(f"https://discord.com/api/v10/channels/{FORUM_CHANNEL_ID}/threads/active", headers=headers)
+
+if forum_threads_res.status_code == 200:
+    threads = forum_threads_res.json().get("threads", [])
+    for th in threads:
+        th_id = th["id"]
+        th_name = th.get("name", "スレッド")
+        
+        # 各スレッドの直近メッセージを取得
+        msg_res = requests.get(f"https://discord.com/api/v10/channels/{th_id}/messages?limit=50", headers=headers)
+        if msg_res.status_code == 200:
+            th_msgs = []
+            for msg in reversed(msg_res.json()):
+                msg_time = datetime.fromisoformat(msg["timestamp"])
+                if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
+                    author = msg.get("author", {}).get("username", "Unknown")
+                    content = msg.get("content", "")
+                    if content:
+                        th_msgs.append(f"{author}: {content}")
+            
+            if th_msgs:
+                collected_data["フォーラム"][f"スレッド: {th_name}"] = th_msgs
+
+# ログ構築
 logs_body = ""
 for cat, channels in collected_data.items():
     logs_body += f"\n=== カテゴリ: {cat} ===\n"
@@ -158,18 +183,20 @@ prompt = f"""
 
 ☕ **カテゴリ：シャーレ談話室**（みんなが何を楽しんでいるか）
 ・#ブルアカ雑談: （話題の箇条書き）
-・#考察・与太話とか: （話題の箇条書き）
 （※会話があったチャンネルのみ抽出し、カテゴリ全体で5〜8行程度でまとめる）
 
 ⚔️ **カテゴリ：争いの足跡**（攻略・編成・スコアアタックの熱量）
 ・#総力戦・大決戦: （話題や編成、期限間際の盛り上がり等）
 （※会話があったチャンネルのみ抽出し、カテゴリ全体で5〜8行程度でまとめる）
 
+💬 **カテゴリ：フォーラム**（議論や特命スレッドの盛り上がり）
+・#スレッド名: （盛り上がっている議論や話題のまとめ）
+（※動きがあったスレッドのみ抽出し、数行でまとめる）
+
 【会話ログ】
 {logs_body}
 """
 
-# 3段階モデルフォールバック構成
 candidate_models = [
     "gemini-3.6-flash",
     "gemini-3.5-flash",
