@@ -122,36 +122,40 @@ for category_name, ch_dict in CHANNELS.items():
 
 # --- フォーラムチャンネルのアクティブスレッド収集 ---
 collected_data["フォーラム"] = {}
-forum_threads_res = requests.get(f"https://discord.com/api/v10/channels/{FORUM_CHANNEL_ID}/threads/active", headers=headers)
 
-print(f"DEBUG: フォーラムAPIステータスコード: {forum_threads_res.status_code}")
-if forum_threads_res.status_code == 200:
-    threads = forum_threads_res.json().get("threads", [])
-    print(f"DEBUG: 取得できたアクティブスレッド数: {len(threads)}")
-    for th in threads:
-        print(f"DEBUG: スレッド発見 -> ID: {th['id']}, Name: {th.get('name')}")
-        th_id = th["id"]
-        th_name = th.get("name", "スレッド")
+if guild_id:
+    # サーバー全体のアクティブスレッドを一括取得
+    guild_threads_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/threads/active", headers=headers)
+    
+    if guild_threads_res.status_code == 200:
+        threads_data = guild_threads_res.json()
+        threads = threads_data.get("threads", [])
         
-        # 各スレッドの直近メッセージを取得
-        msg_res = requests.get(f"https://discord.com/api/v10/channels/{th_id}/messages?limit=50", headers=headers)
-        if msg_res.status_code == 200:
-            th_msgs = []
-            for msg in reversed(msg_res.json()):
-                msg_time = datetime.fromisoformat(msg["timestamp"])
-                if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
-                    author = msg.get("author", {}).get("username", "Unknown")
-                    content = msg.get("content", "")
-                    if content:
-                        th_msgs.append(f"{author}: {content}")
+        # 雑多フォーラム(親ID)に属するスレッドのみ抽出
+        target_threads = [th for th in threads if th.get("parent_id") == FORUM_CHANNEL_ID]
+        print(f"DEBUG: 雑多フォーラム内のアクティブスレッド検出数: {len(target_threads)}")
+        
+        for th in target_threads:
+            th_id = th["id"]
+            th_name = th.get("name", "スレッド")
             
-            print(f"DEBUG: スレッド [{th_name}] の過去24時間メッセージ数: {len(th_msgs)}")
-            if th_msgs:
-                collected_data["フォーラム"][f"スレッド: {th_name}"] = th_msgs
-        else:
-            print(f"DEBUG: スレッド [{th_name}] メッセージ取得エラー: {msg_res.status_code}")
-else:
-    print(f"DEBUG: フォーラム取得失敗 エラー内容: {forum_threads_res.text}")
+            # スレッド内の直近メッセージを取得
+            msg_res = requests.get(f"https://discord.com/api/v10/channels/{th_id}/messages?limit=50", headers=headers)
+            if msg_res.status_code == 200:
+                th_msgs = []
+                for msg in reversed(msg_res.json()):
+                    msg_time = datetime.fromisoformat(msg["timestamp"])
+                    if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
+                        author = msg.get("author", {}).get("username", "Unknown")
+                        content = msg.get("content", "")
+                        if content:
+                            th_msgs.append(f"{author}: {content}")
+                
+                if th_msgs:
+                    print(f"DEBUG: スレッド [{th_name}] から {len(th_msgs)} 件のメッセージを取得！")
+                    collected_data["フォーラム"][f"スレッド: {th_name}"] = th_msgs
+    else:
+        print(f"DEBUG: サーバーアクティブスレッド取得失敗: {guild_threads_res.status_code} {guild_threads_res.text}")
 
 # ログ構築
 logs_body = ""
