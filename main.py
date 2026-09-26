@@ -202,25 +202,39 @@ prompt = f"""
 """
 
 # モデルのフォールバック処理
+# 試行するモデルの優先順リスト
 models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
 summary_text = None
 
 for model_name in models_to_try:
-    try:
-        print(f"  └ モデル試行中: {model_name}")
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-        )
-        summary_text = response.text
-        print(f"✨ 要約生成成功！ (使用モデル: {model_name})")
+    print(f"  └ モデル試行中: {model_name}")
+    
+    # 失敗した場合、最大3回まで試す
+    for attempt in range(1, 4):
+        try:
+            print(f"    ├ 試行 {attempt}/3 回目...")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            summary_text = response.text
+            print(f"✨ 要約生成成功！ (使用モデル: {model_name})")
+            break  # リトライループを抜ける
+        except Exception as e:
+            print(f"    ⚠️ {model_name} (試行 {attempt}/3) でエラーが発生しました: {e}")
+            if attempt < 3:
+                print("    ⏳ 15秒待機して再試行します...")
+                time.sleep(15)
+            else:
+                print(f"    ❌ {model_name} は3回連続で失敗しました。次のモデルに切り替えます。")
+    
+    # 生成に成功していたらモデル切り替えループも抜ける
+    if summary_text:
         break
-    except Exception as e:
-        print(f"  ⚠️ {model_name} でエラーが発生しました: {e}")
-        time.sleep(2)
 
+# 3つのモデルすべてで失敗した場合
 if not summary_text:
-    summary_text = "⚠️ Gemini APIの高負荷により、要約の自動生成に失敗しました。"
+    summary_text = "⚠️ Gemini APIの障害・高負荷により、要約の自動生成に失敗しました。"
 
 print("[5/5] 要約用チャンネル（デイリー要約）へ投稿中...")
 post_data = {
