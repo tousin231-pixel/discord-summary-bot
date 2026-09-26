@@ -49,25 +49,32 @@ if ch_info_res.status_code == 200:
 
 print("[2/5] 本日開催のイベント＆投票情報を取得中...")
 
-# 2. Discordイベント情報の取得（JST表示対応）
+# 2. Discordイベント情報の取得（本日開催分のみ抽出・JST表示対応）
 event_summary = []
 if guild_id:
     event_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events", headers=headers)
     if event_res.status_code == 200:
+        # 現在のJST日付（年月日）を取得
+        today_jst = now.astimezone(timezone(timedelta(hours=9))).date()
+        
         for ev in event_res.json():
-            # ステータス1: 予定中(SCHEDULED), 2: 進行中(ACTIVE)
-            if ev.get("status") in [1, 2]:
+            status = ev.get("status")
+            start_iso = ev.get("scheduled_start_time")
+            
+            if start_iso:
+                utc_dt = datetime.fromisoformat(start_iso)
+                jst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
+                time_str = jst_dt.strftime("%H:%M")
+                event_date_jst = jst_dt.date()
+            else:
+                time_str = "時間未定"
+                event_date_jst = None
+
+            # 判定: 「進行中(status=2)」または「今日開催予定(status=1 かつ 開始日が今日)」
+            is_today_event = (status == 2) or (status == 1 and event_date_jst == today_jst)
+
+            if is_today_event:
                 name = ev.get("name")
-                start_iso = ev.get("scheduled_start_time")
-                
-                # UTC時刻を日本時間(JST = UTC+9)に変換
-                if start_iso:
-                    utc_dt = datetime.fromisoformat(start_iso)
-                    jst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
-                    time_str = jst_dt.strftime("%H:%M")
-                else:
-                    time_str = "時間未定"
-                    
                 event_summary.append(f"・{name} (開始: {time_str} JST)")
 
 event_text = "\n".join(event_summary) if event_summary else "本日開催予定のサーバーイベントはありません。"
