@@ -57,20 +57,27 @@ if guild_id:
 
 event_text = "\n".join(events_summary) if events_summary else "本日開催のイベントはありません。"
 
-# 2. 投票置き場からの投票データ取得（テーマのみ）
+# 2. 投票置き場からの投票データ取得（テーマ＋メッセージリンク）
 poll_summary = []
 poll_res = requests.get(f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=20", headers=headers)
 if poll_res.status_code == 200:
     for msg in poll_res.json():
         msg_time = datetime.fromisoformat(msg["timestamp"])
+        # 過去24時間以内に投稿されたメッセージ
         if msg_time >= yesterday:
+            msg_id = msg["id"]
+            # 該当メッセージへの直接URLを構築
+            msg_link = f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}" if guild_id else ""
+            
+            # Discord標準の投票機能(poll)がある場合
             if "poll" in msg:
                 question = msg["poll"].get("question", {}).get("text", "（無題の投票）")
-                poll_summary.append(f"・【投票受付中】「{question}」")
+                poll_summary.append(f"・【投票受付中】「{question}」\n  👉 投票はこちら: {msg_link}")
+            # テキストでの呼びかけ等の場合
             elif msg.get("content"):
                 author = msg.get("author", {}).get("username", "Unknown")
                 content = msg['content'][:50] + "..." if len(msg['content']) > 50 else msg['content']
-                poll_summary.append(f"・{author}: {content}")
+                poll_summary.append(f"・{author}: {content}\n  👉 メッセージはこちら: {msg_link}")
 
 poll_text = "\n".join(poll_summary) if poll_summary else "過去24時間以内に新しく開始された投票はありません。"
 
@@ -191,7 +198,7 @@ prompt = f"""
 （イベントがある場合のみ記載、なければ「本日開催のイベントはありません」）
 
 📊 **投票置き場のお知らせ**
-（新規投票や話題がある場合のみ記載、なければ「新着の投票はありません」）
+（新規投票がある場合は、テーマと添えられているURL・メッセージリンクを省略せずに記載してください。なければ「新着の投票はありません」）
 
 ☕ **カテゴリ：シャーレ談話室**（みんなが何を楽しんでいるか）
 ・#ブルアカ雑談: （話題の箇条書き）
