@@ -41,21 +41,27 @@ headers = {
 now = datetime.now(timezone.utc)
 yesterday = now - timedelta(days=1)
 
-print("[2/5] 本日開催のイベント＆投票情報を取得中...")
-# 1. ディスコードイベント取得
-ch_res = requests.get(f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}", headers=headers)
-guild_id = ch_res.json().get("guild_id") if ch_res.status_code == 200 else None
+# 2. Discordイベント情報の取得（日本時間 JST への変換処理を追加）
+event_summary = []
+event_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events", headers=headers)
+if event_res.status_code == 200:
+    for ev in event_res.json():
+        # ステータス1: 予定中(SCHEDULED), 2: 進行中(ACTIVE)
+        if ev.get("status") in [1, 2]:
+            name = ev.get("name")
+            start_iso = ev.get("scheduled_start_time")
+            
+            # UTC時刻を日本時間(JST = UTC+9)に変換
+            if start_iso:
+                utc_dt = datetime.fromisoformat(start_iso)
+                jst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
+                time_str = jst_dt.strftime("%H:%M")
+            else:
+                time_str = "時間未定"
+                
+            event_summary.append(f"・{name} (開始: {time_str} JST)")
 
-events_summary = []
-if guild_id:
-    events_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events", headers=headers)
-    if events_res.status_code == 200:
-        for ev in events_res.json():
-            start_time = datetime.fromisoformat(ev["scheduled_start_time"])
-            if yesterday <= start_time <= (now + timedelta(days=1)):
-                events_summary.append(f"・{ev['name']} (開始: {start_time.strftime('%H:%M')} UTC)")
-
-event_text = "\n".join(events_summary) if events_summary else "本日開催のイベントはありません。"
+event_text = "\n".join(event_summary) if event_summary else "本日開催予定のサーバーイベントはありません。"
 
 # 2. 投票置き場からの投票データ取得（テーマ＋メッセージリンク）
 poll_summary = []
