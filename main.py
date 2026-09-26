@@ -124,9 +124,12 @@ for category_name, ch_dict in CHANNELS.items():
 collected_data["フォーラム"] = {}
 forum_threads_res = requests.get(f"https://discord.com/api/v10/channels/{FORUM_CHANNEL_ID}/threads/active", headers=headers)
 
+print(f"DEBUG: フォーラムAPIステータスコード: {forum_threads_res.status_code}")
 if forum_threads_res.status_code == 200:
     threads = forum_threads_res.json().get("threads", [])
+    print(f"DEBUG: 取得できたアクティブスレッド数: {len(threads)}")
     for th in threads:
+        print(f"DEBUG: スレッド発見 -> ID: {th['id']}, Name: {th.get('name')}")
         th_id = th["id"]
         th_name = th.get("name", "スレッド")
         
@@ -142,8 +145,13 @@ if forum_threads_res.status_code == 200:
                     if content:
                         th_msgs.append(f"{author}: {content}")
             
+            print(f"DEBUG: スレッド [{th_name}] の過去24時間メッセージ数: {len(th_msgs)}")
             if th_msgs:
                 collected_data["フォーラム"][f"スレッド: {th_name}"] = th_msgs
+        else:
+            print(f"DEBUG: スレッド [{th_name}] メッセージ取得エラー: {msg_res.status_code}")
+else:
+    print(f"DEBUG: フォーラム取得失敗 エラー内容: {forum_threads_res.text}")
 
 # ログ構築
 logs_body = ""
