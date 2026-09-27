@@ -15,7 +15,7 @@ POLL_CHANNEL_ID = "1526389409841152150"
 # フォーラムチャンネル（親ID）
 FORUM_CHANNEL_ID = "1419978214394167296"
 
-# 収集対象のカテゴリ・チャンネル定義
+# 収集対象のカテゴリ・チャンネル定義（ボイスチャンネルのテキスト含む）
 CHANNELS = {
     "シャーレ談話室": {
         "1376909055091671071": "ブルアカ雑談",
@@ -23,14 +23,18 @@ CHANNELS = {
         "1471118534347194379": "フリースペース",
         "1379430215263981690": "スクショ・動画・ファンアート",
         "1507394652091977891": "質問・総合相談所",
-        "1471401063755284480": "考察・与太話とか"
+        "1471401063755284480": "考察・与太話とか",
+        "1376909055091671074": "談話室1 (VCテキスト)",
+        "1485269967862501557": "談話室2 (VCテキスト)"
     },
     "争いの足跡": {
         "1379058754716307516": "総力戦・大決戦",
         "1380191122948624517": "合同火力演習",
         "1377257209083203614": "戦術対抗戦・編成",
         "1386327021704974478": "制約解除決戦",
-        "1379072804988784780": "任務・イベント・その他"
+        "1379072804988784780": "任務・イベント・その他",
+        "1376909055091671075": "作戦室1 (VCテキスト)",
+        "1527146347306680545": "作戦室2 (VCテキスト)"
     }
 }
 
@@ -77,27 +81,32 @@ if guild_id:
 
 event_text = "\n".join(event_summary) if event_summary else "本日開催予定のサーバーイベントはありません。"
 
-# 2. 投票置き場からの投票データ取得
+# 2. 投票置き場からの投票データ＆関連コメント取得
 poll_summary = []
-poll_res = requests.get(f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=20", headers=headers)
+poll_comments = []
+poll_res = requests.get(f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=50", headers=headers)
 if poll_res.status_code == 200:
     for msg in poll_res.json():
         msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
         if msg_time >= yesterday:
-            msg_id = msg["id"]
-            msg_link = f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}" if guild_id else ""
-            
+            # A. 新規の投票機能 (Poll)
             if "poll" in msg:
+                msg_id = msg["id"]
+                msg_link = f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}" if guild_id else ""
                 question = msg["poll"].get("question", {}).get("text", "（無題の投票）")
                 poll_summary.append(f"・【投票受付中】「{question}」\n  👉 投票はこちら: {msg_link}")
-            elif msg.get("content"):
+            
+            # B. 投票に関するテキストコメント（Bot以外の感想など）
+            elif not msg.get("author", {}).get("bot", False):
                 author = msg.get("author", {}).get("username", "Unknown")
-                content = msg['content'][:50] + "..." if len(msg['content']) > 50 else msg['content']
-                poll_summary.append(f"・{author}: {content}\n  👉 メッセージはこちら: {msg_link}")
+                content = msg.get("content", "")
+                if content:
+                    poll_comments.append(f"{author}: {content}")
 
 poll_text = "\n".join(poll_summary) if poll_summary else "過去24時間以内に新しく開始された投票はありません。"
+poll_comments_text = "\n".join(reversed(poll_comments)) if poll_comments else "なし"
 
-print("[3/5] 対象11チャンネル＆フォーラムから過去24時間のメッセージを収集...", flush=True)
+print("[3/5] 対象チャンネル＆フォーラムから過去24時間のメッセージを収集...", flush=True)
 collected_data = {}
 
 for cat_name, channels in CHANNELS.items():
@@ -116,7 +125,6 @@ for cat_name, channels in CHANNELS.items():
                         ch_msgs.append(f"{author}: {content}")
             
             if ch_msgs:
-                # チャンネル表記にIDリンク (<#ch_id>) を割り当てる
                 collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
 
 # フォーラムのアクティブスレッド取得
@@ -145,8 +153,8 @@ if guild_id:
                             th_msgs.append(f"{author}: {content}")
                 
                 if th_msgs:
-                    # スレッドIDを使ったリンク形式 (<#th_id>) を設定！
                     collected_data["フォーラム"][f"<#{th_id}> ({th_name})"] = th_msgs
+
 # ログテキスト作成
 logs_body = ""
 for cat_name, channels in collected_data.items():
@@ -172,15 +180,16 @@ prompt = f"""
 
 【出力フォーマット】
 以下の形式・チャンネル表記に従って作成してください。
-通常チャンネル名は指定された「<#チャンネルID>」のリンク表記をそのまま使用し、直接移動できるようにしてください。
+通常チャンネル名・VCチャット・フォーラムスレッド名は指定された「<#ID>」のリンク表記をそのまま使用し、直接移動できるようにしてください。
 
 📢 **足跡の化石 デイリーサマリー**
 
 📅 **本日のサーバーイベント**
 （イベントがある場合のみ記載、時間をJST表記で添えてください。なければ「本日開催のイベントはありません」）
 
-📊 **投票置き場のお知らせ**
-（新規投票がある場合は、テーマと添えられているURL・メッセージリンクを省略せずに記載してください。なければ「新着の投票はありません」）
+📊 **投票置き場のお知らせ・話題**
+（1. 新規投票がある場合は、テーマと添えられているURL・メッセージリンクを省略せずに記載してください。）
+（2. 投票に関してメンバーの感想や盛り上がりコメントがある場合は、「💬 メンバーの反応: ○○」のように短い要約でサラッと添えてください。動きがなければ「新着の投票・話題はありません」）
 
 ☕ **カテゴリ：シャーレ談話室**
 ・<#1376909055091671071>: （話題のまとめ）
@@ -196,8 +205,11 @@ prompt = f"""
 【本日開催のディスコ―ドイベント】
 {event_text}
 
-【投票置き場の状況（過去24時間）】
+【投票置き場の新着投票（過去24時間）】
 {poll_text}
+
+【投票置き場のコメント・やり取り】
+{poll_comments_text}
 
 【会話ログ】
 {logs_body}
@@ -205,7 +217,7 @@ prompt = f"""
 
 models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
 summary_text = None
-used_model = None  # ★ 使用されたモデル名を保存する変数
+used_model = None
 
 for model_name in models_to_try:
     print(f"  └ モデル試行中: {model_name}", flush=True)
@@ -218,7 +230,7 @@ for model_name in models_to_try:
                 contents=prompt,
             )
             summary_text = response.text
-            used_model = model_name  # ★ 成功したモデル名をセット
+            used_model = model_name
             print(f"✨ 要約生成成功！ (使用モデル: {model_name})", flush=True)
             break
         except Exception as e:
@@ -232,7 +244,7 @@ for model_name in models_to_try:
     if summary_text:
         break
 
-# 要約が成功した場合のみ末尾にモデル情報を付与
+# 要約末尾にモデル情報を付加（失敗時はエラーメッセージを設定）
 if summary_text and used_model:
     summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
 elif not summary_text:
