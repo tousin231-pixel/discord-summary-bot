@@ -205,6 +205,7 @@ prompt = f"""
 
 models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
 summary_text = None
+used_model = None  # ★ 使用されたモデル名を保存する変数
 
 for model_name in models_to_try:
     print(f"  └ モデル試行中: {model_name}", flush=True)
@@ -217,6 +218,7 @@ for model_name in models_to_try:
                 contents=prompt,
             )
             summary_text = response.text
+            used_model = model_name  # ★ 成功したモデル名をセット
             print(f"✨ 要約生成成功！ (使用モデル: {model_name})", flush=True)
             break
         except Exception as e:
@@ -230,8 +232,10 @@ for model_name in models_to_try:
     if summary_text:
         break
 
-# 3つのモデルすべてで失敗した場合の通知テキスト設定
-if not summary_text:
+# 要約が成功した場合のみ末尾にモデル情報を付与
+if summary_text and used_model:
+    summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
+elif not summary_text:
     summary_text = "⚠️ **【エラー通知】**\nGemini APIの障害または高負荷により、本日のデイリー要約の自動生成に失敗しました。"
 
 print("[5/5] 要約用チャンネルへ投稿中...", flush=True)
