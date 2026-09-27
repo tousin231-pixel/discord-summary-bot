@@ -81,29 +81,37 @@ if guild_id:
 
 event_text = "\n".join(event_summary) if event_summary else "本日開催予定のサーバーイベントはありません。"
 
-# 2. 投票置き場からの投票データ＆関連コメント取得
+# 2. 投票置き場からの投票データ＆関連コメント取得（進行中の投票＋過去24時間のコメント）
 poll_summary = []
 poll_comments = []
 poll_res = requests.get(f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=50", headers=headers)
+
 if poll_res.status_code == 200:
     for msg in poll_res.json():
         msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
-        if msg_time >= yesterday:
-            # A. 新規の投票機能 (Poll)
-            if "poll" in msg:
+        
+        # A. Discord標準の投票機能 (Poll) の処理
+        if "poll" in msg:
+            poll_data = msg["poll"]
+            # 投票がまだ終了していない（is_finalizedがFalse）、または過去24時間以内に投稿された場合
+            is_finalized = poll_data.get("results", {}).get("is_finalized", False)
+            
+            if not is_finalized or msg_time >= yesterday:
                 msg_id = msg["id"]
                 msg_link = f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}" if guild_id else ""
-                question = msg["poll"].get("question", {}).get("text", "（無題の投票）")
-                poll_summary.append(f"・【投票受付中】「{question}」\n  👉 投票はこちら: {msg_link}")
-            
-            # B. 投票に関するテキストコメント（Bot以外の感想など）
-            elif not msg.get("author", {}).get("bot", False):
-                author = msg.get("author", {}).get("username", "Unknown")
-                content = msg.get("content", "")
-                if content:
-                    poll_comments.append(f"{author}: {content}")
+                question = poll_data.get("question", {}).get("text", "（無題の投票）")
+                
+                status_label = "【投票受付中】" if not is_finalized else "【締め切り済み】"
+                poll_summary.append(f"・{status_label}「{question}」\n  👉 投票はこちら: {msg_link}")
 
-poll_text = "\n".join(poll_summary) if poll_summary else "過去24時間以内に新しく開始された投票はありません。"
+        # B. 投票に関するテキストコメント（過去24時間以内のBot以外の感想など）
+        elif msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
+            author = msg.get("author", {}).get("username", "Unknown")
+            content = msg.get("content", "")
+            if content:
+                poll_comments.append(f"{author}: {content}")
+
+poll_text = "\n".join(poll_summary) if poll_summary else "現在アクティブな投票はありません。"
 poll_comments_text = "\n".join(reversed(poll_comments)) if poll_comments else "なし"
 
 print("[3/5] 対象チャンネル＆フォーラムから過去24時間のメッセージを収集...", flush=True)
