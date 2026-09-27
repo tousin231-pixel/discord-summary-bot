@@ -4,7 +4,7 @@ import requests
 from google import genai
 from datetime import datetime, timedelta, timezone
 
-print("[1/5] 環境変数とチャンネル構成の読み込み...")
+print("[1/5] 環境変数とチャンネル構成の読み込み...", flush=True)
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -47,14 +47,13 @@ ch_info_res = requests.get(f"https://discord.com/api/v10/channels/{TARGET_CHANNE
 if ch_info_res.status_code == 200:
     guild_id = ch_info_res.json().get("guild_id")
 
-print("[2/5] 本日開催のイベント＆投票情報を取得中...")
+print("[2/5] 本日開催のイベント＆投票情報を取得中...", flush=True)
 
-# 2. Discordイベント情報の取得（本日開催分のみ抽出・JST表示対応）
+# 1. Discordイベント情報の取得（本日開催分のみ抽出・JST表示対応）
 event_summary = []
 if guild_id:
     event_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events", headers=headers)
     if event_res.status_code == 200:
-        # 現在のJST日付（年月日）を取得
         today_jst = now.astimezone(timezone(timedelta(hours=9))).date()
         
         for ev in event_res.json():
@@ -62,7 +61,7 @@ if guild_id:
             start_iso = ev.get("scheduled_start_time")
             
             if start_iso:
-                utc_dt = datetime.fromisoformat(start_iso)
+                utc_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
                 jst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
                 time_str = jst_dt.strftime("%H:%M")
                 event_date_jst = jst_dt.date()
@@ -70,7 +69,6 @@ if guild_id:
                 time_str = "時間未定"
                 event_date_jst = None
 
-            # 判定: 「進行中(status=2)」または「今日開催予定(status=1 かつ 開始日が今日)」
             is_today_event = (status == 2) or (status == 1 and event_date_jst == today_jst)
 
             if is_today_event:
@@ -79,12 +77,12 @@ if guild_id:
 
 event_text = "\n".join(event_summary) if event_summary else "本日開催予定のサーバーイベントはありません。"
 
-# 2. 投票置き場からの投票データ取得（テーマ＋メッセージリンク）
+# 2. 投票置き場からの投票データ取得
 poll_summary = []
 poll_res = requests.get(f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=20", headers=headers)
 if poll_res.status_code == 200:
     for msg in poll_res.json():
-        msg_time = datetime.fromisoformat(msg["timestamp"])
+        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
         if msg_time >= yesterday:
             msg_id = msg["id"]
             msg_link = f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}" if guild_id else ""
@@ -99,7 +97,7 @@ if poll_res.status_code == 200:
 
 poll_text = "\n".join(poll_summary) if poll_summary else "過去24時間以内に新しく開始された投票はありません。"
 
-print("[3/5] 対象11チャンネル＆フォーラムから過去24時間のメッセージを収集...")
+print("[3/5] 対象11チャンネル＆フォーラムから過去24時間のメッセージを収集...", flush=True)
 collected_data = {}
 
 for cat_name, channels in CHANNELS.items():
@@ -110,7 +108,7 @@ for cat_name, channels in CHANNELS.items():
             messages = res.json()
             ch_msgs = []
             for msg in reversed(messages):
-                msg_time = datetime.fromisoformat(msg["timestamp"])
+                msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
                 if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
                     author = msg.get("author", {}).get("username", "Unknown")
                     content = msg.get("content", "")
@@ -118,7 +116,8 @@ for cat_name, channels in CHANNELS.items():
                         ch_msgs.append(f"{author}: {content}")
             
             if ch_msgs:
-                collected_data[cat_name][ch_name] = ch_msgs
+                # チャンネル表記にIDリンク (<#ch_id>) を割り当てる
+                collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
 
 # フォーラムのアクティブスレッド取得
 collected_data["フォーラム"] = {}
@@ -138,7 +137,7 @@ if guild_id:
             if msg_res.status_code == 200:
                 th_msgs = []
                 for msg in reversed(msg_res.json()):
-                    msg_time = datetime.fromisoformat(msg["timestamp"])
+                    msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
                     if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
                         author = msg.get("author", {}).get("username", "Unknown")
                         content = msg.get("content", "")
@@ -146,21 +145,21 @@ if guild_id:
                             th_msgs.append(f"{author}: {content}")
                 
                 if th_msgs:
-                    collected_data["フォーラム"][f"スレッド: {th_name}"] = th_msgs
-
+                    # スレッドIDを使ったリンク形式 (<#th_id>) を設定！
+                    collected_data["フォーラム"][f"<#{th_id}> ({th_name})"] = th_msgs
 # ログテキスト作成
 logs_body = ""
 for cat_name, channels in collected_data.items():
     if channels:
         logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
-        for ch_name, msgs in channels.items():
-            logs_body += f"--- #{ch_name} ---\n"
+        for ch_tag, msgs in channels.items():
+            logs_body += f"--- {ch_tag} ---\n"
             logs_body += "\n".join(msgs) + "\n"
 
 if not logs_body.strip():
     logs_body = "過去24時間の新規投稿はありませんでした。"
 
-print("[4/5] Gemini APIによる要約作成中...")
+print("[4/5] Gemini APIによる要約作成中...", flush=True)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 prompt = f"""
@@ -173,7 +172,7 @@ prompt = f"""
 
 【出力フォーマット】
 以下の形式・チャンネル表記に従って作成してください。
-チャンネル名は指定された「チャンネルリンク表記（例: <#1376909055091671071>）」をそのまま使用し、直接移動できるようにしてください。
+通常チャンネル名は指定された「<#チャンネルID>」のリンク表記をそのまま使用し、直接移動できるようにしてください。
 
 📢 **足跡の化石 デイリーサマリー**
 
@@ -185,15 +184,14 @@ prompt = f"""
 
 ☕ **カテゴリ：シャーレ談話室**
 ・<#1376909055091671071>: （話題のまとめ）
-・<#1389948670455185439>: （話題のまとめ）
-...（※会話があったチャンネルのみ抽出し、各チャンネルのリンク表記を先頭につけて箇条書きにする）
+...（※会話があったチャンネルのみ抽出し、各チャンネルのリンク表記 <#ID> を先頭につけて箇条書きにする）
 
 ⚔️ **カテゴリ：争いの足跡**
 ・<#1379058754716307516>: （話題のまとめ）
 ...（※会話があったチャンネルのみ抽出）
 
 💬 **カテゴリ：フォーラム**
-・#スレッド名: （盛り上がっている議論や話題のまとめ）
+・<#スレッドID>: （盛り上がっている議論や話題のまとめ）
 
 【本日開催のディスコ―ドイベント】
 {event_text}
@@ -205,48 +203,49 @@ prompt = f"""
 {logs_body}
 """
 
-# モデルのフォールバック処理
-# 試行するモデルの優先順リスト
 models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
 summary_text = None
 
 for model_name in models_to_try:
-    print(f"  └ モデル試行中: {model_name}")
+    print(f"  └ モデル試行中: {model_name}", flush=True)
     
-    # 失敗した場合、最大3回まで試す
     for attempt in range(1, 4):
         try:
-            print(f"    ├ 試行 {attempt}/3 回目...")
+            print(f"    ├ 試行 {attempt}/3 回目...", flush=True)
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
             )
             summary_text = response.text
-            print(f"✨ 要約生成成功！ (使用モデル: {model_name})")
-            break  # リトライループを抜ける
+            print(f"✨ 要約生成成功！ (使用モデル: {model_name})", flush=True)
+            break
         except Exception as e:
-            print(f"    ⚠️ {model_name} (試行 {attempt}/3) でエラーが発生しました: {e}")
+            print(f"    ⚠️ {model_name} (試行 {attempt}/3) でエラーが発生しました: {e}", flush=True)
             if attempt < 3:
-                print("    ⏳ 15秒待機して再試行します...")
+                print("    ⏳ 15秒待機して再試行します...", flush=True)
                 time.sleep(15)
             else:
-                print(f"    ❌ {model_name} は3回連続で失敗しました。次のモデルに切り替えます。")
+                print(f"    ❌ {model_name} は3回連続で失敗しました。次のモデルに切り替えます。", flush=True)
     
-    # 生成に成功していたらモデル切り替えループも抜ける
     if summary_text:
         break
 
-# 3つのモデルすべてで失敗した場合
+# 3つのモデルすべてで失敗した場合の通知テキスト設定
 if not summary_text:
-    summary_text = "⚠️ Gemini APIの障害・高負荷により、要約の自動生成に失敗しました。"
+    summary_text = "⚠️ **【エラー通知】**\nGemini APIの障害または高負荷により、本日のデイリー要約の自動生成に失敗しました。"
 
-print("[5/5] 要約用チャンネル（デイリー要約）へ投稿中...")
-post_data = {
-    "content": summary_text
-}
-post_res = requests.post(f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}/messages", headers=headers, json=post_data)
+print("[5/5] 要約用チャンネルへ投稿中...", flush=True)
 
-if post_res.status_code in [200, 201]:
-    print("✨ デイリー要約の投稿が完了しました！")
-else:
-    print(f"❌ 投稿失敗: {post_res.status_code} {post_res.text}")
+# 2,000文字分割送信（Discord制限対策）
+max_length = 1900
+chunks = [summary_text[i:i + max_length] for i in range(0, len(summary_text), max_length)]
+
+for idx, chunk in enumerate(chunks):
+    post_data = {"content": chunk}
+    post_res = requests.post(f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}/messages", headers=headers, json=post_data)
+
+    if post_res.status_code in [200, 201]:
+        print(f"✨ 要約メッセージの投稿に成功しました ({idx + 1}/{len(chunks)})", flush=True)
+    else:
+        print(f"❌ 投稿失敗 ({idx + 1}/{len(chunks)}): {post_res.status_code} {post_res.text}", flush=True)
+    time.sleep(1)
