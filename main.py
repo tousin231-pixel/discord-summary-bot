@@ -1,10 +1,11 @@
 import os
 import time
 import requests
+from bs4 import BeautifulSoup
 from google import genai
 from datetime import datetime, timedelta, timezone
 
-print("[1/5] 環境変数とチャンネル構成の読み込み...", flush=True)
+print("[1/6] 環境変数とチャンネル構成の読み込み...", flush=True)
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -51,7 +52,56 @@ ch_info_res = requests.get(f"https://discord.com/api/v10/channels/{TARGET_CHANNE
 if ch_info_res.status_code == 200:
     guild_id = ch_info_res.json().get("guild_id")
 
-print("[2/5] 本日開催のイベント＆投票情報を取得中...", flush=True)
+print("[2/6] ブルアカ公式Wikiから最新ゲーム内イベント情報を取得中...", flush=True)
+
+# 0. Wikiからのゲーム内イベント情報スクレイピング
+def get_bluearchive_game_events():
+    url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
+    req_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    try:
+        response = requests.get(url, headers=req_headers, timeout=10)
+        response.encoding = response.apparent_encoding
+        
+        if response.status_code != 200:
+            return "現在特別なゲーム内お知らせはありません。"
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        events = []
+        
+        # 見出しから「開催中」または「現在」に関連する箇所のリスト・テーブルを抽出
+        headings = soup.find_all(['h2', 'h3'])
+        for heading in headings:
+            if "開催中" in heading.text or "現在" in heading.text:
+                next_node = heading.find_next_sibling()
+                while next_node and next_node.name not in ['h2', 'h3']:
+                    if next_node.name in ['ul', 'ol']:
+                        for li in next_node.find_all('li'):
+                            text = li.get_text(strip=True)
+                            if text:
+                                events.append(f"・{text}")
+                    elif next_node.name == 'table':
+                        for row in next_node.find_all('tr'):
+                            cols = [ele.text.strip() for ele in row.find_all(['td', 'th'])]
+                            if cols:
+                                events.append(" | ".join(cols))
+                    next_node = next_node.find_next_sibling()
+
+        if events:
+            unique_events = list(dict.fromkeys(events))
+            return "\n".join(unique_events[:8])
+        else:
+            return "現在特別なゲーム内お知らせはありません。"
+
+    except Exception as e:
+        print(f"⚠️ Wiki取得エラー: {e}", flush=True)
+        return "現在特別なゲーム内お知らせはありません。"
+
+game_event_text = get_bluearchive_game_events()
+
+print("[3/6] 本日開催のイベント＆投票情報を取得中...", flush=True)
 
 # 1. Discordイベント情報の取得（本日開催分のみ抽出・JST表示対応）
 event_summary = []
@@ -93,7 +143,6 @@ if poll_res.status_code == 200:
         # A. Discord標準の投票機能 (Poll) の処理
         if "poll" in msg:
             poll_data = msg["poll"]
-            # 投票がまだ終了していない（is_finalizedがFalse）、または過去24時間以内に投稿された場合
             is_finalized = poll_data.get("results", {}).get("is_finalized", False)
             
             if not is_finalized or msg_time >= yesterday:
@@ -114,7 +163,7 @@ if poll_res.status_code == 200:
 poll_text = "\n".join(poll_summary) if poll_summary else "現在アクティブな投票はありません。"
 poll_comments_text = "\n".join(reversed(poll_comments)) if poll_comments else "なし"
 
-print("[3/5] 対象チャンネル＆フォーラムから過去24時間のメッセージを収集...", flush=True)
+print("[4/6] 対象チャンネル＆フォーラムから過去24時間のメッセージを収集...", flush=True)
 collected_data = {}
 
 for cat_name, channels in CHANNELS.items():
@@ -175,12 +224,12 @@ for cat_name, channels in collected_data.items():
 if not logs_body.strip():
     logs_body = "過去24時間の新規投稿はありませんでした。"
 
-print("[4/5] Gemini APIによる要約作成中...", flush=True)
+print("[5/6] Gemini APIによる要約作成中...", flush=True)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 prompt = f"""
 あなたはDiscordサーバー「足跡の化石」の広報Botです。
-以下のログを元に、メンバーがパッと見て要点を把握でき、サーバーの盛り上がりが伝わる簡潔なデイリー要約を作成してください。
+以下のログおよび【ブルアカ最新ゲーム内イベント情報】を元に、メンバーがパッと見て要点を把握でき、サーバーの盛り上がりが伝わる簡潔なデイリー要約を作成してください。
 
 【コミュニティ前提ルール】
 ・ネタバレOK・歓迎のサーバーです。ストーリー、キャラクター、編成、攻略などの具体的な内容を隠さず記載してください。
@@ -197,7 +246,7 @@ prompt = f"""
 【表現スタイル】
 ・ブルーアーカイブのアロナとして、朝の挨拶から始めてください。
   （例：「先生！おはようございます！アロナです！今朝も準備バッチリですよ！」）
-・「昨日の盛り上がり」と「本日チェックすべき予定（イベント・投票）」が直感的に伝わるテンポの良い案内文にしてください。
+・「昨日の盛り上がり」と「本日チェックすべき予定（イベント・投票・ゲーム最新情報）」が直感的に伝わるテンポの良い案内文にしてください。
 ・アロナらしい元気で健気な言葉遣い（「〜ですよ！」「〜ですね！」「お任せください！」など）を徹底してください。
 
 【出力フォーマット例】
@@ -209,6 +258,9 @@ prompt = f"""
 📊 **投票置き場のお知らせ・話題**
 （1. 現在進行中の投票がある場合は、テーマと添えられているURL・メッセージリンクを省略せずに記載してください。）
 （2. 投票に関してメンバーの反応がある場合は、「💬 メンバーの反応: ○○」のように短く添えてください。なければ「新着の投票はありません。」）
+
+💙 **ブルーアーカイブ 最新ゲーム情報**
+（【ブルアカ最新ゲーム内イベント情報】を参考に、現在開催中のイベントや総力戦、キャンペーン等をアロナらしく1〜3行程度で案内してください。特別な情報がなければ「現在特別なゲーム内お知らせはありません。」）
 
 ☕ **カテゴリ：シャーレ談話室**
 - <#1376909055091671071>
@@ -227,6 +279,9 @@ prompt = f"""
 - <#スレッドID>
   - 【会話ログ】に基づいた話題
   （※【会話ログ】に基づいた話題がなければ「新着の会話はありません。」）
+
+【ブルアカ最新ゲーム内イベント情報】
+{game_event_text}
 
 【本日開催のディスコ―ドイベント】
 {event_text}
@@ -276,7 +331,7 @@ if summary_text and used_model:
 elif not summary_text:
     summary_text = "⚠️ **【エラー通知】**\nGemini APIの障害または高負荷により、本日のデイリー要約の自動生成に失敗しました。"
 
-print("[5/5] 要約用チャンネルへ投稿中...", flush=True)
+print("[6/6] 要約用チャンネルへ投稿中...", flush=True)
 
 # 2,000文字分割送信（Discord制限対策）
 max_length = 1900
