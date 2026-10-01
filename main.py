@@ -51,7 +51,7 @@ ch_info_res = requests.get(
     f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}", headers=headers
 )
 if ch_info_res.status_code == 200:
-  guild_id = ch_info_res.json().get("guild_id")
+    guild_id = ch_info_res.json().get("guild_id")
 
 print(
     "[2/6] ブルアカ公式Wikiから最新ゲーム内イベント＆誕生日情報を取得中...",
@@ -61,150 +61,150 @@ print(
 
 # 0-1. Wikiからのゲーム内イベント情報スクレイピング
 def get_bluearchive_game_events():
-  url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
-  req_headers = {
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-          " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      )
-  }
+    url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
+    req_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
 
-  try:
-    response = requests.get(url, headers=req_headers, timeout=10)
-    response.encoding = response.apparent_encoding
+    try:
+        response = requests.get(url, headers=req_headers, timeout=10)
+        response.encoding = response.apparent_encoding
 
-    if response.status_code != 200:
-      return "現在特別なゲーム内お知らせはありません。"
+        if response.status_code != 200:
+            return "現在特別なゲーム内お知らせはありません。"
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    events = []
+        soup = BeautifulSoup(response.text, "html.parser")
+        events = []
 
-    # 方法1: 「開催中」が含まれる親ブロック/テーブル/リストを探す
-    elements = soup.find_all(text=re.compile(r"開催中|現在開催"))
-    for elem in elements:
-      parent = elem.find_parent(["table", "ul", "div"])
-      if parent:
-        if parent.name == "table":
-          for row in parent.find_all("tr"):
-            text = row.get_text(separator=" ", strip=True)
-            if text and len(text) > 3:
-              events.append(f"・{text}")
-        elif parent.name == "ul":
-          for li in parent.find_all("li"):
-            text = li.get_text(strip=True)
-            if text:
-              events.append(f"・{text}")
+        # 方法1: 「開催中」が含まれる親ブロック/テーブル/リストを探す
+        elements = soup.find_all(string=re.compile(r"開催中|現在開催"))
+        for elem in elements:
+            parent = elem.find_parent(["table", "ul", "div"])
+            if parent:
+                if parent.name == "table":
+                    for row in parent.find_all("tr"):
+                        text = row.get_text(separator=" ", strip=True)
+                        if text and len(text) > 3:
+                            events.append(f"・{text}")
+                elif parent.name == "ul":
+                    for li in parent.find_all("li"):
+                        text = li.get_text(strip=True)
+                        if text:
+                            events.append(f"・{text}")
 
-    # 方法2: 主要なテーブルから抽出
-    if not events:
-      tables = soup.find_all("table")
-      for table in tables[:3]:
-        for row in table.find_all("tr"):
-          text = row.get_text(separator=" | ", strip=True)
-          if "開催" in text or "期間" in text or "ガチャ" in text:
-            events.append(f"・{text}")
+        # 方法2: 主要なテーブルから抽出
+        if not events:
+            tables = soup.find_all("table")
+            for table in tables[:3]:
+                for row in table.find_all("tr"):
+                    text = row.get_text(separator=" | ", strip=True)
+                    if "開催" in text or "期間" in text or "ガチャ" in text:
+                        events.append(f"・{text}")
 
-    if events:
-      clean_events = []
-      for ev in events:
-        if len(ev) > 5 and ev not in clean_events:
-          clean_events.append(ev)
+        if events:
+            clean_events = []
+            for ev in events:
+                if len(ev) > 5 and ev not in clean_events:
+                    clean_events.append(ev)
 
-      if clean_events:
-        return "\n".join(clean_events[:6])
+            if clean_events:
+                return "\n".join(clean_events[:6])
 
-    return "現在特別なゲーム内お知らせはありません。"
+        return "現在特別なゲーム内お知らせはありません。"
 
-  except Exception as e:
-    print(f"⚠️ Wiki取得エラー: {e}", flush=True)
-    return "現在特別なゲーム内お知らせはありません。"
+    except Exception as e:
+        print(f"⚠️ Wiki取得エラー: {e}", flush=True)
+        return "現在特別なゲーム内お知らせはありません。"
 
 
 # 0-2. Wikiからの生徒誕生日情報スクレイピング
 def get_today_bluearchive_birthdays():
-  url = "https://bluearchive.wikiru.jp/?MenuBar/%E8%AA%95%E7%94%9F%E6%97%A5%E4%B8%80%E8%A6%A7"
-  req_headers = {
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-          " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      )
-  }
-
-  # 日本時間（JST）で今日の日付を取得
-  now_jst = datetime.now(timezone(timedelta(hours=9)))
-  month_day_str1 = now_jst.strftime("%m/%d")  # 例: "10/01"
-  month_day_str2 = f"{now_jst.month}/{now_jst.day}"  # 例: "10/1"
-
-  try:
-    response = requests.get(url, headers=req_headers, timeout=10)
-    response.encoding = response.apparent_encoding
-
-    if response.status_code != 200:
-      return None
-
-    soup = BeautifulSoup(response.text, "html.parser")
-    birthday_students = []
-
-    text_lines = soup.get_text().splitlines()
-    for line in text_lines:
-      line_str = line.strip()
-      if month_day_str1 in line_str or month_day_str2 in line_str:
-        clean_name = re.sub(
-            r"^.*?\d{1,2}/\d{1,2}\s*[:：\s-]*", "", line_str
+    url = "https://bluearchive.wikiru.jp/?MenuBar/%E8%AA%95%E7%94%9F%E6%97%A5%E4%B8%80%E8%A6%A7"
+    req_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        if clean_name and clean_name not in birthday_students:
-          birthday_students.append(clean_name)
+    }
 
-    if birthday_students:
-      return "、".join(birthday_students)
+    # 日本時間（JST）で今日の日付を取得
+    now_jst = datetime.now(timezone(timedelta(hours=9)))
+    month_day_str1 = now_jst.strftime("%m/%d")  # 例: "10/01"
+    month_day_str2 = f"{now_jst.month}/{now_jst.day}"  # 例: "10/1"
 
-    return None
+    try:
+        response = requests.get(url, headers=req_headers, timeout=10)
+        response.encoding = response.apparent_encoding
 
-  except Exception as e:
-    print(f"⚠️ 誕生日スクレイピングエラー: {e}", flush=True)
-    return None
+        if response.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        birthday_students = []
+
+        text_lines = soup.get_text().splitlines()
+        for line in text_lines:
+            line_str = line.strip()
+            if month_day_str1 in line_str or month_day_str2 in line_str:
+                clean_name = re.sub(
+                    r"^.*?\d{1,2}/\d{1,2}\s*[:：\s-]*", "", line_str
+                )
+                if clean_name and clean_name not in birthday_students:
+                    birthday_students.append(clean_name)
+
+        if birthday_students:
+            return "、".join(birthday_students)
+
+        return None
+
+    except Exception as e:
+        print(f"⚠️ 誕生日スクレイピングエラー: {e}", flush=True)
+        return None
 
 
 game_event_text = get_bluearchive_game_events()
 today_student_birthday = get_today_bluearchive_birthdays()
 
 if today_student_birthday:
-  birthday_info_text = f"本日お誕生日の生徒: {today_student_birthday}ちゃん"
+    birthday_info_text = f"本日お誕生日の生徒: {today_student_birthday}ちゃん"
 else:
-  birthday_info_text = "本日お誕生日の生徒はいません。"
+    birthday_info_text = "本日お誕生日の生徒はいません。"
 
 print("[3/6] 本日開催のイベント＆投票情報を取得中...", flush=True)
 
 # 1. Discordイベント情報の取得
 event_summary = []
 if guild_id:
-  event_res = requests.get(
-      f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events",
-      headers=headers,
-  )
-  if event_res.status_code == 200:
-    today_jst = now.astimezone(timezone(timedelta(hours=9))).date()
+    event_res = requests.get(
+        f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events",
+        headers=headers,
+    )
+    if event_res.status_code == 200:
+        today_jst = now.astimezone(timezone(timedelta(hours=9))).date()
 
-    for ev in event_res.json():
-      status = ev.get("status")
-      start_iso = ev.get("scheduled_start_time")
+        for ev in event_res.json():
+            status = ev.get("status")
+            start_iso = ev.get("scheduled_start_time")
 
-      if start_iso:
-        utc_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-        jst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
-        time_str = jst_dt.strftime("%H:%M")
-        event_date_jst = jst_dt.date()
-      else:
-        time_str = "時間未定"
-        event_date_jst = None
+            if start_iso:
+                utc_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+                jst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
+                time_str = jst_dt.strftime("%H:%M")
+                event_date_jst = jst_dt.date()
+            else:
+                time_str = "時間未定"
+                event_date_jst = None
 
-      is_today_event = (status == 2) or (
-          status == 1 and event_date_jst == today_jst
-      )
+            is_today_event = (status == 2) or (
+                status == 1 and event_date_jst == today_jst
+            )
 
-      if is_today_event:
-        name = ev.get("name")
-        event_summary.append(f"・{name} (開始: {time_str} JST)")
+            if is_today_event:
+                name = ev.get("name")
+                event_summary.append(f"・{name} (開始: {time_str} JST)")
 
 event_text = (
     "\n".join(event_summary)
@@ -221,36 +221,36 @@ poll_res = requests.get(
 )
 
 if poll_res.status_code == 200:
-  for msg in poll_res.json():
-    msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+    for msg in poll_res.json():
+        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
 
-    if "poll" in msg:
-      poll_data = msg["poll"]
-      is_finalized = poll_data.get("results", {}).get("is_finalized", False)
+        if "poll" in msg:
+            poll_data = msg["poll"]
+            is_finalized = poll_data.get("results", {}).get("is_finalized", False)
 
-      if not is_finalized or msg_time >= yesterday:
-        msg_id = msg["id"]
-        msg_link = (
-            f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}"
-            if guild_id
-            else ""
-        )
-        question = poll_data.get("question", {}).get(
-            "text", "（無題の投票）"
-        )
+            if not is_finalized or msg_time >= yesterday:
+                msg_id = msg["id"]
+                msg_link = (
+                    f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}"
+                    if guild_id
+                    else ""
+                )
+                question = poll_data.get("question", {}).get(
+                    "text", "（無題の投票）"
+                )
 
-        status_label = (
-            "【投票受付中】" if not is_finalized else "【締め切り済み】"
-        )
-        poll_summary.append(
-            f"・{status_label}「{question}」\n    👉 投票はこちら: {msg_link}"
-        )
+                status_label = (
+                    "【投票受付中】" if not is_finalized else "【締め切り済み】"
+                )
+                poll_summary.append(
+                    f"・{status_label}「{question}」\n    👉 投票はこちら: {msg_link}"
+                )
 
-    elif msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
-      author = msg.get("author", {}).get("username", "Unknown")
-      content = msg.get("content", "")
-      if content:
-        poll_comments.append(f"{author}: {content}")
+        elif msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
+            author = msg.get("author", {}).get("username", "Unknown")
+            content = msg.get("content", "")
+            if content:
+                poll_comments.append(f"{author}: {content}")
 
 poll_text = (
     "\n".join(poll_summary)
@@ -268,79 +268,79 @@ print(
 collected_data = {}
 
 for cat_name, channels in CHANNELS.items():
-  collected_data[cat_name] = {}
-  for ch_id, ch_name in channels.items():
-    res = requests.get(
-        f"https://discord.com/api/v10/channels/{ch_id}/messages?limit=100",
-        headers=headers,
-    )
-    if res.status_code == 200:
-      messages = res.json()
-      ch_msgs = []
-      for msg in reversed(messages):
-        msg_time = datetime.fromisoformat(
-            msg["timestamp"].replace("Z", "+00:00")
+    collected_data[cat_name] = {}
+    for ch_id, ch_name in channels.items():
+        res = requests.get(
+            f"https://discord.com/api/v10/channels/{ch_id}/messages?limit=100",
+            headers=headers,
         )
-        if msg_time >= yesterday and not msg.get("author", {}).get(
-            "bot", False
-        ):
-          author = msg.get("author", {}).get("username", "Unknown")
-          content = msg.get("content", "")
-          if content:
-            ch_msgs.append(f"{author}: {content}")
+        if res.status_code == 200:
+            messages = res.json()
+            ch_msgs = []
+            for msg in reversed(messages):
+                msg_time = datetime.fromisoformat(
+                    msg["timestamp"].replace("Z", "+00:00")
+                )
+                if msg_time >= yesterday and not msg.get("author", {}).get(
+                    "bot", False
+                ):
+                    author = msg.get("author", {}).get("username", "Unknown")
+                    content = msg.get("content", "")
+                    if content:
+                        ch_msgs.append(f"{author}: {content}")
 
-      if ch_msgs:
-        collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
+            if ch_msgs:
+                collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
 
 collected_data["フォーラム"] = {}
 if guild_id:
-  guild_threads_res = requests.get(
-      f"https://discord.com/api/v10/guilds/{guild_id}/threads/active",
-      headers=headers,
-  )
-  if guild_threads_res.status_code == 200:
-    threads_data = guild_threads_res.json()
-    threads = threads_data.get("threads", [])
+    guild_threads_res = requests.get(
+        f"https://discord.com/api/v10/guilds/{guild_id}/threads/active",
+        headers=headers,
+    )
+    if guild_threads_res.status_code == 200:
+        threads_data = guild_threads_res.json()
+        threads = threads_data.get("threads", [])
 
-    target_threads = [
-        th for th in threads if th.get("parent_id") == FORUM_CHANNEL_ID
-    ]
+        target_threads = [
+            th for th in threads if th.get("parent_id") == FORUM_CHANNEL_ID
+        ]
 
-    for th in target_threads:
-      th_id = th["id"]
-      th_name = th.get("name", "スレッド")
+        for th in target_threads:
+            th_id = th["id"]
+            th_name = th.get("name", "スレッド")
 
-      msg_res = requests.get(
-          f"https://discord.com/api/v10/channels/{th_id}/messages?limit=50",
-          headers=headers,
-      )
-      if msg_res.status_code == 200:
-        th_msgs = []
-        for msg in reversed(msg_res.json()):
-          msg_time = datetime.fromisoformat(
-              msg["timestamp"].replace("Z", "+00:00")
-          )
-          if msg_time >= yesterday and not msg.get("author", {}).get(
-              "bot", False
-          ):
-            author = msg.get("author", {}).get("username", "Unknown")
-            content = msg.get("content", "")
-            if content:
-              th_msgs.append(f"{author}: {content}")
+            msg_res = requests.get(
+                f"https://discord.com/api/v10/channels/{th_id}/messages?limit=50",
+                headers=headers,
+            )
+            if msg_res.status_code == 200:
+                th_msgs = []
+                for msg in reversed(msg_res.json()):
+                    msg_time = datetime.fromisoformat(
+                        msg["timestamp"].replace("Z", "+00:00")
+                    )
+                    if msg_time >= yesterday and not msg.get("author", {}).get(
+                        "bot", False
+                    ):
+                        author = msg.get("author", {}).get("username", "Unknown")
+                        content = msg.get("content", "")
+                        if content:
+                            th_msgs.append(f"{author}: {content}")
 
-        if th_msgs:
-          collected_data["フォーラム"][f"<#{th_id}> ({th_name})"] = th_msgs
+                if th_msgs:
+                    collected_data["フォーラム"][f"<#{th_id}> ({th_name})"] = th_msgs
 
 logs_body = ""
 for cat_name, channels in collected_data.items():
-  if channels:
-    logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
-    for ch_tag, msgs in channels.items():
-      logs_body += f"--- {ch_tag} ---\n"
-      logs_body += "\n".join(msgs) + "\n"
+    if channels:
+        logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
+        for ch_tag, msgs in channels.items():
+            logs_body += f"--- {ch_tag} ---\n"
+            logs_body += "\n".join(msgs) + "\n"
 
 if not logs_body.strip():
-  logs_body = "過去24時間の新規投稿はありませんでした。"
+    logs_body = "過去24時間の新規投稿はありませんでした。"
 
 print("[5/6] Gemini APIによる要約作成中...", flush=True)
 client = genai.Client(api_key=GEMINI_API_KEY)
