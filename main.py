@@ -1,9 +1,11 @@
 import os
 import time
 import requests
+import re
 from bs4 import BeautifulSoup
 from google import genai
 from datetime import datetime, timedelta, timezone
+
 
 print("[1/6] 環境変数とチャンネル構成の読み込み...", flush=True)
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
@@ -71,29 +73,44 @@ def get_bluearchive_game_events():
         soup = BeautifulSoup(response.text, "html.parser")
         events = []
         
-        # 見出しから「開催中」または「現在」に関連する箇所のリスト・テーブルを抽出
-        headings = soup.find_all(['h2', 'h3'])
-        for heading in headings:
-            if "開催中" in heading.text or "現在" in heading.text:
-                next_node = heading.find_next_sibling()
-                while next_node and next_node.name not in ['h2', 'h3']:
-                    if next_node.name in ['ul', 'ol']:
-                        for li in next_node.find_all('li'):
-                            text = li.get_text(strip=True)
-                            if text:
-                                events.append(f"・{text}")
-                    elif next_node.name == 'table':
-                        for row in next_node.find_all('tr'):
-                            cols = [ele.text.strip() for ele in row.find_all(['td', 'th'])]
-                            if cols:
-                                events.append(" | ".join(cols))
-                    next_node = next_node.find_next_sibling()
+        # 方法1: 「開催中」が含まれる親ブロック/テーブル/リストを探す
+        # ページ内の「開催中」というテキストを持つ全要素を検索
+        elements = soup.find_all(text=re.compile(r"開催中|現在開催"))
+        for elem in elements:
+            # 親要素を遡ってテーブルやリストを探す
+            parent = elem.find_parent(['table', 'ul', 'div'])
+            if parent:
+                if parent.name == 'table':
+                    for row in parent.find_all('tr'):
+                        text = row.get_text(separator=" ", strip=True)
+                        if text and len(text) > 3:
+                            events.append(f"・{text}")
+                elif parent.name == 'ul':
+                    for li in parent.find_all('li'):
+                        text = li.get_text(strip=True)
+                        if text:
+                            events.append(f"・{text}")
+
+        # 方法2: もし上記で取れなかった場合、ページ内の主要なテーブルから最新イベント列を取得
+        if not events:
+            tables = soup.find_all('table')
+            for table in tables[:3]: # 上部にある主要な表をチェック
+                for row in table.find_all('tr'):
+                    text = row.get_text(separator=" | ", strip=True)
+                    if "開催" in text or "期間" in text or "ガチャ" in text:
+                        events.append(f"・{text}")
 
         if events:
-            unique_events = list(dict.fromkeys(events))
-            return "\n".join(unique_events[:8])
-        else:
-            return "現在特別なゲーム内お知らせはありません。"
+            # ノイズ除去と重複排除（短すぎる行やヘッダーを除外）
+            clean_events = []
+            for ev in events:
+                if len(ev) > 5 and ev not in clean_events:
+                    clean_events.append(ev)
+            
+            if clean_events:
+                return "\n".join(clean_events[:6]) # 上位6件を抽出
+
+        return "現在特別なゲーム内お知らせはありません。"
 
     except Exception as e:
         print(f"⚠️ Wiki取得エラー: {e}", flush=True)
