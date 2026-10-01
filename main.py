@@ -59,7 +59,7 @@ print(
 )
 
 
-# 0-1. Wikiからのゲーム内イベント情報スクレイピング
+# 0-1. Wikiからのゲーム内イベント情報スクレイピング（期間・残り日数解析つき）
 def get_bluearchive_game_events():
     url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
     req_headers = {
@@ -78,40 +78,53 @@ def get_bluearchive_game_events():
 
         soup = BeautifulSoup(response.text, "html.parser")
         events = []
+        now_jst = datetime.now(timezone(timedelta(hours=9)))
+        today = now_jst.date()
 
-        # 方法1: 「開催中」が含まれる親ブロック/テーブル/リストを探す
-        elements = soup.find_all(string=re.compile(r"開催中|現在開催"))
-        for elem in elements:
-            parent = elem.find_parent(["table", "ul", "div"])
-            if parent:
-                if parent.name == "table":
-                    for row in parent.find_all("tr"):
-                        text = row.get_text(separator=" ", strip=True)
-                        if text and len(text) > 3:
-                            events.append(f"・{text}")
-                elif parent.name == "ul":
-                    for li in parent.find_all("li"):
-                        text = li.get_text(strip=True)
-                        if text:
-                            events.append(f"・{text}")
+        # 「開催中のイベント」配下のリストを探す
+        heading = soup.find(lambda tag: tag.name in ["h2", "h3", "h4", "div"] and "開催中のイベント" in tag.text)
+        
+        target_container = None
+        if heading:
+            target_container = heading.find_next(["ul", "div", "table"])
 
-        # 方法2: 主要なテーブルから抽出
-        if not events:
-            tables = soup.find_all("table")
-            for table in tables[:3]:
-                for row in table.find_all("tr"):
-                    text = row.get_text(separator=" | ", strip=True)
-                    if "開催" in text or "期間" in text or "ガチャ" in text:
-                        events.append(f"・{text}")
+        if not target_container:
+            # 見つからない場合は全体から検索
+            target_container = soup
+
+        items = target_container.find_all("li") if target_container.name != "table" else target_container.find_all("tr")
+
+        for item in items:
+            text = item.get_text(separator=" ", strip=True)
+            if not text or len(text) < 5:
+                continue
+
+            # 日付パターンの正規表現（例: 2026/9/23 ～ 10/7 10:59 または 2027/1/20）
+            # カッコ内の終了日時を抽出
+            match = re.search(r"\((?:\d{4}/)?\d{1,2}/\d{1,2}[^\n~]*~\s*(?:(\d{4})/)?(\d{1,2})/(\d{1,2})\s*(\d{1,2}:\d{2})\)", text)
+            
+            remaining_str = ""
+            if match:
+                end_year = int(match.group(1)) if match.group(1) else now_jst.year
+                end_month = int(match.group(2))
+                end_day = int(match.group(3))
+
+                try:
+                    end_date = datetime(end_year, end_month, end_day).date()
+                    days_left = (end_date - today).days
+                    if days_left > 0:
+                        remaining_str = f"【残り あと {days_left} 日】"
+                    elif days_left == 0:
+                        remaining_str = "【本日終了！】"
+                    else:
+                        remaining_str = "【終了間近】"
+                except Exception:
+                    remaining_str = ""
+
+            events.append(f"・{text} {remaining_str}".strip())
 
         if events:
-            clean_events = []
-            for ev in events:
-                if len(ev) > 5 and ev not in clean_events:
-                    clean_events.append(ev)
-
-            if clean_events:
-                return "\n".join(clean_events[:6])
+            return "\n".join(events[:8])
 
         return "現在特別なゲーム内お知らせはありません。"
 
@@ -358,9 +371,9 @@ prompt = f"""
 ・広報Botらしくメンバーの熱量や情景が浮かぶ親しみやすい文末にしてください。
 ・プロンプト内の例の単語をそのまま出力せず、必ず【会話ログ】に存在する内容のみを要約してください。
 ・**本日の誕生日セクションでは、【ブルアカ生徒の本日誕生日情報】に該当者がいるか、または【会話ログ】でお祝いの話題があるかを確認してお祝いしてください。該当がない場合は「本日お誕生日のメンバー・生徒はいません。」と記載した上で、アロナらしく一言添えてください。**
-・**ブルーアーカイブ 最新ゲーム情報は、必ず絵文字つきの箇条書き（`- `）で1項目1行に分けて出力してください。**
-  ※総力戦・大決戦・合同火力演習は同時に開催されないため、開催中のもの（いずれか1つ）のみを出力してください。
-  ※高難易度コンテンツ（総力戦/大決戦/合同火力演習）が何も開催されていない場合は、**「🏆 総力戦・大決戦・合同火力演習: キヴォトスは現在平和な状態です」** とアロナらしく記載してください。
+・**ブルーアーカイブ 最新ゲーム情報は、必ず各項目（イベント・総力戦/大決戦・制約解除決戦・ガチャ・キャンペーンなど）について開催期間と残り期間（あと○日など）を明記し、絵文字つきの箇条書き（`- `）で出力してください。**
+  ※総力戦・大決戦・合同火力演習などの開催情報がない場合は**「🏆 総力戦・大決戦・合同火力演習: キヴォトスは現在平和な状態です」** と記載してください。
+  ※制約解除決戦が開催中の場合は必ず対象のボス名や属性を含めて独立した行で記載してください。
 ・**【本日のサーバーイベント】や【投票置き場】に該当がない場合も、ただ否定するのではなく、アロナらしく明るく健気に一言添えてください。**
   （例：イベントなし → 「本日開催予定のサーバーイベントはありません。今日はのんびり過ごすチャンスですね、先生！」）
   （例：投票なし → 「現在アクティブな投票はありません。新しいアンケートや企画の提案もお待ちしていますよ！」）
@@ -388,12 +401,13 @@ prompt = f"""
 （2. 投票に関してメンバーの反応がある場合は、「💬 メンバーの反応: ○○」のように短く添えてください。なければ「新着の投票はありません。」）
 
 💙 **ブルーアーカイブ 最新ゲーム情報**
-（【ブルアカ最新ゲーム内イベント情報】を参考に、以下のように箇条書きで1行ずつ読みやすく整理してください。情報がない場合は「現在特別なゲーム内お知らせはありません。」とだけ記載してください。）
-- 🎪 **イベント**: 「イベント名」開催中！
-- 🏆 **総力戦・大決戦・合同火力演習**: 「総力戦 / 大決戦 / 合同火力演習 のいずれか1つ」開催中！
+（【ブルアカ最新ゲーム内イベント情報】を参考に、以下のように各項目の開催期間と残り期間を含めて箇条書きで1行ずつ整理してください。情報がない場合は「現在特別なゲーム内お知らせはありません。」とだけ記載してください。）
+- 🎪 **イベント**: 「イベント名」（開催期間: YYYY/MM/DD ～ MM/DD） - **残り あと X 日**
+- 🏆 **総力戦・大決戦・合同火力演習**: 「ボス名・種別」（開催期間: YYYY/MM/DD ～ MM/DD） - **残り あと X 日**
   （※開催がない場合は「🏆 決戦・演習: キヴォトスは現在平和な状態です」）
-- 🫐 **ピックアップ募集**: ★3生徒名が登場中ですよ！
-- 🎁 **キャンペーン**: キャンペーン名実施中！
+- ⚔️ **制約解除決戦**: 「ボス名・防御属性」（開催期間: YYYY/MM/DD ～ MM/DD） - **残り あと X 日**
+- 🫐 **ピックアップ募集**: ★3生徒名が登場中！ - **残り あと X 日**
+- 🎁 **キャンペーン**: キャンペーン名実施中！ - **残り あと X 日**
 
 ☕ **カテゴリ：シャーレ談話室**
 - <#1376909055091671071>
@@ -437,48 +451,48 @@ summary_text = None
 used_model = None
 
 for model_name in models_to_try:
-  print(f"  └ モデル試行中: {model_name}", flush=True)
+    print(f"  └ モデル試行中: {model_name}", flush=True)
 
-  for attempt in range(1, 4):
-    try:
-      print(f"    ├ 試行 {attempt}/3 回目...", flush=True)
-      response = client.models.generate_content(
-          model=model_name,
-          contents=prompt,
-      )
-      summary_text = response.text
-      used_model = model_name
-      print(
-          f"✨ 要約生成成功！ (使用モデル: {model_name})", flush=True
-      )
-      break
-    except Exception as e:
-      print(
-          f"    ⚠️ {model_name} (試行 {attempt}/3)"
-          f" でエラーが発生しました: {e}",
-          flush=True,
-      )
-      if attempt < 3:
-        print("    ⏳ 15秒待機して再試行します...", flush=True)
-        time.sleep(15)
-      else:
-        print(
-            f"    ❌ {model_name}"
-            " は3回連続で失敗しました。次のモデルに切り替えます。",
-            flush=True,
-        )
+    for attempt in range(1, 4):
+        try:
+            print(f"    ├ 試行 {attempt}/3 回目...", flush=True)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            summary_text = response.text
+            used_model = model_name
+            print(
+                f"✨ 要約生成成功！ (使用モデル: {model_name})", flush=True
+            )
+            break
+        except Exception as e:
+            print(
+                f"    ⚠️ {model_name} (試行 {attempt}/3)"
+                f" でエラーが発生しました: {e}",
+                flush=True,
+            )
+            if attempt < 3:
+                print("    ⏳ 15秒待機して再試行します...", flush=True)
+                time.sleep(15)
+            else:
+                print(
+                    f"    ❌ {model_name}"
+                    " は3回連続で失敗しました。次のモデルに切り替えます。",
+                    flush=True,
+                )
 
-  if summary_text:
-    break
+    if summary_text:
+        break
 
 # 要約末尾にモデル情報を付加
 if summary_text and used_model:
-  summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
+    summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
 elif not summary_text:
-  summary_text = (
-      "⚠️ **【エラー通知】**\nGemini"
-      " APIの障害または高負荷により、本日のデイリー要約の自動生成に失敗しました。"
-  )
+    summary_text = (
+        "⚠️ **【エラー通知】**\nGemini"
+        " APIの障害または高負荷により、本日のデイリー要約の自動生成に失敗しました。"
+    )
 
 print("[6/6] 要約用チャンネルへ投稿中...", flush=True)
 
@@ -490,22 +504,22 @@ chunks = [
 ]
 
 for idx, chunk in enumerate(chunks):
-  post_data = {"content": chunk}
-  post_res = requests.post(
-      f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}/messages",
-      headers=headers,
-      json=post_data,
-  )
+    post_data = {"content": chunk}
+    post_res = requests.post(
+        f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}/messages",
+        headers=headers,
+        json=post_data,
+    )
 
-  if post_res.status_code in [200, 201]:
-    print(
-        f"✨ 要約メッセージの投稿に成功しました ({idx + 1}/{len(chunks)})",
-        flush=True,
-    )
-  else:
-    print(
-        f"❌ 投稿失敗 ({idx + 1}/{len(chunks)}): {post_res.status_code}"
-        f" {post_res.text}",
-        flush=True,
-    )
-  time.sleep(1)
+    if post_res.status_code in [200, 201]:
+        print(
+            f"✨ 要約メッセージの投稿に成功しました ({idx + 1}/{len(chunks)})",
+            flush=True,
+        )
+    else:
+        print(
+            f"❌ 投稿失敗 ({idx + 1}/{len(chunks)}): {post_res.status_code}"
+            f" {post_res.text}",
+            flush=True,
+        )
+    time.sleep(1)
