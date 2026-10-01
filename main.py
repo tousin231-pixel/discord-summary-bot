@@ -1,11 +1,10 @@
 import os
-import time
-import requests
 import re
+import time
+from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 from google import genai
-from datetime import datetime, timedelta, timezone
-
+import requests
 
 print("[1/6] 環境変数とチャンネル構成の読み込み...", flush=True)
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
@@ -28,7 +27,7 @@ CHANNELS = {
         "1507394652091977891": "質問・総合相談所",
         "1471401063755284480": "考察・与太話とか",
         "1376909055091671074": "談話室1 (VCテキスト)",
-        "1485269967862501557": "談話室2 (VCテキスト)"
+        "1485269967862501557": "談話室2 (VCテキスト)",
     },
     "争いの足跡": {
         "1379058754716307516": "総力戦・大決戦",
@@ -37,216 +36,318 @@ CHANNELS = {
         "1386327021704974478": "制約解除決戦",
         "1379072804988784780": "任務・イベント・その他",
         "1376909055091671075": "作戦室1 (VCテキスト)",
-        "1527146347306680545": "作戦室2 (VCテキスト)"
-    }
+        "1527146347306680545": "作戦室2 (VCテキスト)",
+    },
 }
 
-headers = {
-    "Authorization": f"Bot {DISCORD_BOT_TOKEN}"
-}
+headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
 
 now = datetime.now(timezone.utc)
 yesterday = now - timedelta(days=1)
 
 # まず guild_id (サーバーID) を取得
 guild_id = None
-ch_info_res = requests.get(f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}", headers=headers)
+ch_info_res = requests.get(
+    f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}", headers=headers
+)
 if ch_info_res.status_code == 200:
-    guild_id = ch_info_res.json().get("guild_id")
+  guild_id = ch_info_res.json().get("guild_id")
 
-print("[2/6] ブルアカ公式Wikiから最新ゲーム内イベント情報を取得中...", flush=True)
+print(
+    "[2/6] ブルアカ公式Wikiから最新ゲーム内イベント＆誕生日情報を取得中...",
+    flush=True,
+)
 
-# 0. Wikiからのゲーム内イベント情報スクレイピング
+
+# 0-1. Wikiからのゲーム内イベント情報スクレイピング
 def get_bluearchive_game_events():
-    url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
-    req_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+  url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
+  req_headers = {
+      "User-Agent": (
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+          " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      )
+  }
 
-    try:
-        response = requests.get(url, headers=req_headers, timeout=10)
-        response.encoding = response.apparent_encoding
-        
-        if response.status_code != 200:
-            return "現在特別なゲーム内お知らせはありません。"
+  try:
+    response = requests.get(url, headers=req_headers, timeout=10)
+    response.encoding = response.apparent_encoding
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        events = []
-        
-        # 方法1: 「開催中」が含まれる親ブロック/テーブル/リストを探す
-        # ページ内の「開催中」というテキストを持つ全要素を検索
-        elements = soup.find_all(text=re.compile(r"開催中|現在開催"))
-        for elem in elements:
-            # 親要素を遡ってテーブルやリストを探す
-            parent = elem.find_parent(['table', 'ul', 'div'])
-            if parent:
-                if parent.name == 'table':
-                    for row in parent.find_all('tr'):
-                        text = row.get_text(separator=" ", strip=True)
-                        if text and len(text) > 3:
-                            events.append(f"・{text}")
-                elif parent.name == 'ul':
-                    for li in parent.find_all('li'):
-                        text = li.get_text(strip=True)
-                        if text:
-                            events.append(f"・{text}")
+    if response.status_code != 200:
+      return "現在特別なゲーム内お知らせはありません。"
 
-        # 方法2: もし上記で取れなかった場合、ページ内の主要なテーブルから最新イベント列を取得
-        if not events:
-            tables = soup.find_all('table')
-            for table in tables[:3]: # 上部にある主要な表をチェック
-                for row in table.find_all('tr'):
-                    text = row.get_text(separator=" | ", strip=True)
-                    if "開催" in text or "期間" in text or "ガチャ" in text:
-                        events.append(f"・{text}")
+    soup = BeautifulSoup(response.text, "html.parser")
+    events = []
 
-        if events:
-            # ノイズ除去と重複排除（短すぎる行やヘッダーを除外）
-            clean_events = []
-            for ev in events:
-                if len(ev) > 5 and ev not in clean_events:
-                    clean_events.append(ev)
-            
-            if clean_events:
-                return "\n".join(clean_events[:6]) # 上位6件を抽出
+    # 方法1: 「開催中」が含まれる親ブロック/テーブル/リストを探す
+    elements = soup.find_all(text=re.compile(r"開催中|現在開催"))
+    for elem in elements:
+      parent = elem.find_parent(["table", "ul", "div"])
+      if parent:
+        if parent.name == "table":
+          for row in parent.find_all("tr"):
+            text = row.get_text(separator=" ", strip=True)
+            if text and len(text) > 3:
+              events.append(f"・{text}")
+        elif parent.name == "ul":
+          for li in parent.find_all("li"):
+            text = li.get_text(strip=True)
+            if text:
+              events.append(f"・{text}")
 
-        return "現在特別なゲーム内お知らせはありません。"
+    # 方法2: 主要なテーブルから抽出
+    if not events:
+      tables = soup.find_all("table")
+      for table in tables[:3]:
+        for row in table.find_all("tr"):
+          text = row.get_text(separator=" | ", strip=True)
+          if "開催" in text or "期間" in text or "ガチャ" in text:
+            events.append(f"・{text}")
 
-    except Exception as e:
-        print(f"⚠️ Wiki取得エラー: {e}", flush=True)
-        return "現在特別なゲーム内お知らせはありません。"
+    if events:
+      clean_events = []
+      for ev in events:
+        if len(ev) > 5 and ev not in clean_events:
+          clean_events.append(ev)
+
+      if clean_events:
+        return "\n".join(clean_events[:6])
+
+    return "現在特別なゲーム内お知らせはありません。"
+
+  except Exception as e:
+    print(f"⚠️ Wiki取得エラー: {e}", flush=True)
+    return "現在特別なゲーム内お知らせはありません。"
+
+
+# 0-2. Wikiからの生徒誕生日情報スクレイピング
+def get_today_bluearchive_birthdays():
+  url = "https://bluearchive.wikiru.jp/?MenuBar/%E8%AA%95%E7%94%9F%E6%97%A5%E4%B8%80%E8%A6%A7"
+  req_headers = {
+      "User-Agent": (
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+          " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      )
+  }
+
+  # 日本時間（JST）で今日の日付を取得
+  now_jst = datetime.now(timezone(timedelta(hours=9)))
+  month_day_str1 = now_jst.strftime("%m/%d")  # 例: "10/01"
+  month_day_str2 = f"{now_jst.month}/{now_jst.day}"  # 例: "10/1"
+
+  try:
+    response = requests.get(url, headers=req_headers, timeout=10)
+    response.encoding = response.apparent_encoding
+
+    if response.status_code != 200:
+      return None
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    birthday_students = []
+
+    text_lines = soup.get_text().splitlines()
+    for line in text_lines:
+      line_str = line.strip()
+      if month_day_str1 in line_str or month_day_str2 in line_str:
+        clean_name = re.sub(
+            r"^.*?\d{1,2}/\d{1,2}\s*[:：\s-]*", "", line_str
+        )
+        if clean_name and clean_name not in birthday_students:
+          birthday_students.append(clean_name)
+
+    if birthday_students:
+      return "、".join(birthday_students)
+
+    return None
+
+  except Exception as e:
+    print(f"⚠️ 誕生日スクレイピングエラー: {e}", flush=True)
+    return None
+
 
 game_event_text = get_bluearchive_game_events()
+today_student_birthday = get_today_bluearchive_birthdays()
+
+if today_student_birthday:
+  birthday_info_text = f"本日お誕生日の生徒: {today_student_birthday}ちゃん"
+else:
+  birthday_info_text = "本日お誕生日の生徒はいません。"
 
 print("[3/6] 本日開催のイベント＆投票情報を取得中...", flush=True)
 
-# 1. Discordイベント情報の取得（本日開催分のみ抽出・JST表示対応）
+# 1. Discordイベント情報の取得
 event_summary = []
 if guild_id:
-    event_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events", headers=headers)
-    if event_res.status_code == 200:
-        today_jst = now.astimezone(timezone(timedelta(hours=9))).date()
-        
-        for ev in event_res.json():
-            status = ev.get("status")
-            start_iso = ev.get("scheduled_start_time")
-            
-            if start_iso:
-                utc_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-                jst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
-                time_str = jst_dt.strftime("%H:%M")
-                event_date_jst = jst_dt.date()
-            else:
-                time_str = "時間未定"
-                event_date_jst = None
+  event_res = requests.get(
+      f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events",
+      headers=headers,
+  )
+  if event_res.status_code == 200:
+    today_jst = now.astimezone(timezone(timedelta(hours=9))).date()
 
-            is_today_event = (status == 2) or (status == 1 and event_date_jst == today_jst)
+    for ev in event_res.json():
+      status = ev.get("status")
+      start_iso = ev.get("scheduled_start_time")
 
-            if is_today_event:
-                name = ev.get("name")
-                event_summary.append(f"・{name} (開始: {time_str} JST)")
+      if start_iso:
+        utc_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        jst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
+        time_str = jst_dt.strftime("%H:%M")
+        event_date_jst = jst_dt.date()
+      else:
+        time_str = "時間未定"
+        event_date_jst = None
 
-event_text = "\n".join(event_summary) if event_summary else "本日開催予定のサーバーイベントはありません。"
+      is_today_event = (status == 2) or (
+          status == 1 and event_date_jst == today_jst
+      )
 
-# 2. 投票置き場からの投票データ＆関連コメント取得（進行中の投票＋過去24時間のコメント）
+      if is_today_event:
+        name = ev.get("name")
+        event_summary.append(f"・{name} (開始: {time_str} JST)")
+
+event_text = (
+    "\n".join(event_summary)
+    if event_summary
+    else "本日開催予定のサーバーイベントはありません。"
+)
+
+# 2. 投票置き場からのデータ取得
 poll_summary = []
 poll_comments = []
-poll_res = requests.get(f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=50", headers=headers)
+poll_res = requests.get(
+    f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=50",
+    headers=headers,
+)
 
 if poll_res.status_code == 200:
-    for msg in poll_res.json():
-        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
-        
-        # A. Discord標準の投票機能 (Poll) の処理
-        if "poll" in msg:
-            poll_data = msg["poll"]
-            is_finalized = poll_data.get("results", {}).get("is_finalized", False)
-            
-            if not is_finalized or msg_time >= yesterday:
-                msg_id = msg["id"]
-                msg_link = f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}" if guild_id else ""
-                question = poll_data.get("question", {}).get("text", "（無題の投票）")
-                
-                status_label = "【投票受付中】" if not is_finalized else "【締め切り済み】"
-                poll_summary.append(f"・{status_label}「{question}」\n  👉 投票はこちら: {msg_link}")
+  for msg in poll_res.json():
+    msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
 
-        # B. 投票に関するテキストコメント（過去24時間以内のBot以外の感想など）
-        elif msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
-            author = msg.get("author", {}).get("username", "Unknown")
-            content = msg.get("content", "")
-            if content:
-                poll_comments.append(f"{author}: {content}")
+    if "poll" in msg:
+      poll_data = msg["poll"]
+      is_finalized = poll_data.get("results", {}).get("is_finalized", False)
 
-poll_text = "\n".join(poll_summary) if poll_summary else "現在アクティブな投票はありません。"
-poll_comments_text = "\n".join(reversed(poll_comments)) if poll_comments else "なし"
+      if not is_finalized or msg_time >= yesterday:
+        msg_id = msg["id"]
+        msg_link = (
+            f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}"
+            if guild_id
+            else ""
+        )
+        question = poll_data.get("question", {}).get(
+            "text", "（無題の投票）"
+        )
 
-print("[4/6] 対象チャンネル＆フォーラムから過去24時間のメッセージを収集...", flush=True)
+        status_label = (
+            "【投票受付中】" if not is_finalized else "【締め切り済み】"
+        )
+        poll_summary.append(
+            f"・{status_label}「{question}」\n    👉 投票はこちら: {msg_link}"
+        )
+
+    elif msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
+      author = msg.get("author", {}).get("username", "Unknown")
+      content = msg.get("content", "")
+      if content:
+        poll_comments.append(f"{author}: {content}")
+
+poll_text = (
+    "\n".join(poll_summary)
+    if poll_summary
+    else "現在アクティブな投票はありません。"
+)
+poll_comments_text = (
+    "\n".join(reversed(poll_comments)) if poll_comments else "なし"
+)
+
+print(
+    "[4/6] 対象チャンネル＆フォーラムから過去24時間のメッセージを収集...",
+    flush=True,
+)
 collected_data = {}
 
 for cat_name, channels in CHANNELS.items():
-    collected_data[cat_name] = {}
-    for ch_id, ch_name in channels.items():
-        res = requests.get(f"https://discord.com/api/v10/channels/{ch_id}/messages?limit=100", headers=headers)
-        if res.status_code == 200:
-            messages = res.json()
-            ch_msgs = []
-            for msg in reversed(messages):
-                msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
-                if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
-                    author = msg.get("author", {}).get("username", "Unknown")
-                    content = msg.get("content", "")
-                    if content:
-                        ch_msgs.append(f"{author}: {content}")
-            
-            if ch_msgs:
-                collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
+  collected_data[cat_name] = {}
+  for ch_id, ch_name in channels.items():
+    res = requests.get(
+        f"https://discord.com/api/v10/channels/{ch_id}/messages?limit=100",
+        headers=headers,
+    )
+    if res.status_code == 200:
+      messages = res.json()
+      ch_msgs = []
+      for msg in reversed(messages):
+        msg_time = datetime.fromisoformat(
+            msg["timestamp"].replace("Z", "+00:00")
+        )
+        if msg_time >= yesterday and not msg.get("author", {}).get(
+            "bot", False
+        ):
+          author = msg.get("author", {}).get("username", "Unknown")
+          content = msg.get("content", "")
+          if content:
+            ch_msgs.append(f"{author}: {content}")
 
-# フォーラムのアクティブスレッド取得
+      if ch_msgs:
+        collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
+
 collected_data["フォーラム"] = {}
 if guild_id:
-    guild_threads_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/threads/active", headers=headers)
-    if guild_threads_res.status_code == 200:
-        threads_data = guild_threads_res.json()
-        threads = threads_data.get("threads", [])
-        
-        target_threads = [th for th in threads if th.get("parent_id") == FORUM_CHANNEL_ID]
-        
-        for th in target_threads:
-            th_id = th["id"]
-            th_name = th.get("name", "スレッド")
-            
-            msg_res = requests.get(f"https://discord.com/api/v10/channels/{th_id}/messages?limit=50", headers=headers)
-            if msg_res.status_code == 200:
-                th_msgs = []
-                for msg in reversed(msg_res.json()):
-                    msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
-                    if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
-                        author = msg.get("author", {}).get("username", "Unknown")
-                        content = msg.get("content", "")
-                        if content:
-                            th_msgs.append(f"{author}: {content}")
-                
-                if th_msgs:
-                    collected_data["フォーラム"][f"<#{th_id}> ({th_name})"] = th_msgs
+  guild_threads_res = requests.get(
+      f"https://discord.com/api/v10/guilds/{guild_id}/threads/active",
+      headers=headers,
+  )
+  if guild_threads_res.status_code == 200:
+    threads_data = guild_threads_res.json()
+    threads = threads_data.get("threads", [])
 
-# ログテキスト作成
+    target_threads = [
+        th for th in threads if th.get("parent_id") == FORUM_CHANNEL_ID
+    ]
+
+    for th in target_threads:
+      th_id = th["id"]
+      th_name = th.get("name", "スレッド")
+
+      msg_res = requests.get(
+          f"https://discord.com/api/v10/channels/{th_id}/messages?limit=50",
+          headers=headers,
+      )
+      if msg_res.status_code == 200:
+        th_msgs = []
+        for msg in reversed(msg_res.json()):
+          msg_time = datetime.fromisoformat(
+              msg["timestamp"].replace("Z", "+00:00")
+          )
+          if msg_time >= yesterday and not msg.get("author", {}).get(
+              "bot", False
+          ):
+            author = msg.get("author", {}).get("username", "Unknown")
+            content = msg.get("content", "")
+            if content:
+              th_msgs.append(f"{author}: {content}")
+
+        if th_msgs:
+          collected_data["フォーラム"][f"<#{th_id}> ({th_name})"] = th_msgs
+
 logs_body = ""
 for cat_name, channels in collected_data.items():
-    if channels:
-        logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
-        for ch_tag, msgs in channels.items():
-            logs_body += f"--- {ch_tag} ---\n"
-            logs_body += "\n".join(msgs) + "\n"
+  if channels:
+    logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
+    for ch_tag, msgs in channels.items():
+      logs_body += f"--- {ch_tag} ---\n"
+      logs_body += "\n".join(msgs) + "\n"
 
 if not logs_body.strip():
-    logs_body = "過去24時間の新規投稿はありませんでした。"
+  logs_body = "過去24時間の新規投稿はありませんでした。"
 
 print("[5/6] Gemini APIによる要約作成中...", flush=True)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 prompt = f"""
 あなたはDiscordサーバー「足跡の化石」の広報Botです。
-以下のログおよび【ブルアカ最新ゲーム内イベント情報】を元に、メンバーがパッと見て要点を把握でき、サーバーの盛り上がりが伝わる簡潔なデイリー要約を作成してください。
+以下のログおよび【ブルアカ最新ゲーム内イベント情報】【ブルアカ生徒の本日誕生日情報】を元に、メンバーがパッと見て要点を把握でき、サーバーの盛り上がりが伝わる簡潔なデイリー要約を作成してください。
 
 【コミュニティ前提ルール】
 ・ネタバレOK・歓迎のサーバーです。ストーリー、キャラクター、編成、攻略などの具体的な内容を隠さず記載してください。
@@ -256,6 +357,8 @@ prompt = f"""
 ・**同じチャンネル（<#ID>）を2度以上登場させないでください。** 1つのチャンネルで複数の話題がある場合は、インデント（下げて `- `）でぶら下げてください。
 ・広報Botらしくメンバーの熱量や情景が浮かぶ親しみやすい文末にしてください。
 ・プロンプト内の例の単語をそのまま出力せず、必ず【会話ログ】に存在する内容のみを要約してください。
+・**本日の誕生日セクションでは、【ブルアカ生徒の本日誕生日情報】に該当者がいるかを確認してお祝いしてください。該当がない場合のみ「本日お誕生日のメンバー・生徒はいません。」と記載してください。**
+・**ブルーアーカイブ 最新ゲーム情報は、必ず絵文字つきの箇条書き（`- `）で1項目1行に分けて出力してください。**
 ・目が滑らないよう、要点だけを短く・テンポ良くまとめてください。
 ・通常チャンネル名・VCチャット・フォーラムスレッド名は指定された「<#ID>」のリンク表記をそのまま使用してください。
 ・【会話ログ】が空の場合は、各カテゴリに「本日の新規投稿はありません。」と記載してください。
@@ -269,6 +372,9 @@ prompt = f"""
 【出力フォーマット例】
 📢 **足跡の化石 デイリーサマリー**
 
+🎂 **本日の誕生日**
+（【ブルアカ生徒の本日誕生日情報】に誕生日の話題・情報がある場合、対象者や生徒をお祝いするメッセージを1〜2行でアロナらしく記載してください。該当がなければ「本日お誕生日のメンバー・生徒はいません。」）
+
 📅 **本日のサーバーイベント**
 （イベントがある場合のみ記載、時間をJST表記で添えてください。なければ「本日開催予定のサーバーイベントはありません。」）
 
@@ -277,7 +383,11 @@ prompt = f"""
 （2. 投票に関してメンバーの反応がある場合は、「💬 メンバーの反応: ○○」のように短く添えてください。なければ「新着の投票はありません。」）
 
 💙 **ブルーアーカイブ 最新ゲーム情報**
-（【ブルアカ最新ゲーム内イベント情報】を参考に、現在開催中のイベントや総力戦、キャンペーン等をアロナらしく1〜3行程度で案内してください。特別な情報がなければ「現在特別なゲーム内お知らせはありません。」）
+（【ブルアカ最新ゲーム内イベント情報】を参考に、以下のように箇条書きで1行ずつ読みやすく整理してください。情報がない場合は「現在特別なゲーム内お知らせはありません。」とだけ記載してください。）
+- 🎪 **イベント**: 「イベント名」開催中！
+- 🏆 **総力戦**: 「ボス名」開催中！
+- 🫐 **ピックアップ募集**: ★3生徒名が登場中ですよ！
+- 🎁 **キャンペーン**: キャンペーン名実施中！
 
 ☕ **カテゴリ：シャーレ談話室**
 - <#1376909055091671071>
@@ -296,6 +406,9 @@ prompt = f"""
 - <#スレッドID>
   - 【会話ログ】に基づいた話題
   （※【会話ログ】に基づいた話題がなければ「新着の会話はありません。」）
+
+【ブルアカ生徒の本日誕生日情報】
+{birthday_info_text}
 
 【ブルアカ最新ゲーム内イベント情報】
 {game_event_text}
@@ -318,48 +431,75 @@ summary_text = None
 used_model = None
 
 for model_name in models_to_try:
-    print(f"  └ モデル試行中: {model_name}", flush=True)
-    
-    for attempt in range(1, 4):
-        try:
-            print(f"    ├ 試行 {attempt}/3 回目...", flush=True)
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-            )
-            summary_text = response.text
-            used_model = model_name
-            print(f"✨ 要約生成成功！ (使用モデル: {model_name})", flush=True)
-            break
-        except Exception as e:
-            print(f"    ⚠️ {model_name} (試行 {attempt}/3) でエラーが発生しました: {e}", flush=True)
-            if attempt < 3:
-                print("    ⏳ 15秒待機して再試行します...", flush=True)
-                time.sleep(15)
-            else:
-                print(f"    ❌ {model_name} は3回連続で失敗しました。次のモデルに切り替えます。", flush=True)
-    
-    if summary_text:
-        break
+  print(f"  └ モデル試行中: {model_name}", flush=True)
 
-# 要約末尾にモデル情報を付加（失敗時はエラーメッセージを設定）
+  for attempt in range(1, 4):
+    try:
+      print(f"    ├ 試行 {attempt}/3 回目...", flush=True)
+      response = client.models.generate_content(
+          model=model_name,
+          contents=prompt,
+      )
+      summary_text = response.text
+      used_model = model_name
+      print(
+          f"✨ 要約生成成功！ (使用モデル: {model_name})", flush=True
+      )
+      break
+    except Exception as e:
+      print(
+          f"    ⚠️ {model_name} (試行 {attempt}/3)"
+          f" でエラーが発生しました: {e}",
+          flush=True,
+      )
+      if attempt < 3:
+        print("    ⏳ 15秒待機して再試行します...", flush=True)
+        time.sleep(15)
+      else:
+        print(
+            f"    ❌ {model_name}"
+            " は3回連続で失敗しました。次のモデルに切り替えます。",
+            flush=True,
+        )
+
+  if summary_text:
+    break
+
+# 要約末尾にモデル情報を付加
 if summary_text and used_model:
-    summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
+  summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
 elif not summary_text:
-    summary_text = "⚠️ **【エラー通知】**\nGemini APIの障害または高負荷により、本日のデイリー要約の自動生成に失敗しました。"
+  summary_text = (
+      "⚠️ **【エラー通知】**\nGemini"
+      " APIの障害または高負荷により、本日のデイリー要約の自動生成に失敗しました。"
+  )
 
 print("[6/6] 要約用チャンネルへ投稿中...", flush=True)
 
-# 2,000文字分割送信（Discord制限対策）
+# 2,000文字分割送信
 max_length = 1900
-chunks = [summary_text[i:i + max_length] for i in range(0, len(summary_text), max_length)]
+chunks = [
+    summary_text[i : i + max_length]
+    for i in range(0, len(summary_text), max_length)
+]
 
 for idx, chunk in enumerate(chunks):
-    post_data = {"content": chunk}
-    post_res = requests.post(f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}/messages", headers=headers, json=post_data)
+  post_data = {"content": chunk}
+  post_res = requests.post(
+      f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}/messages",
+      headers=headers,
+      json=post_data,
+  )
 
-    if post_res.status_code in [200, 201]:
-        print(f"✨ 要約メッセージの投稿に成功しました ({idx + 1}/{len(chunks)})", flush=True)
-    else:
-        print(f"❌ 投稿失敗 ({idx + 1}/{len(chunks)}): {post_res.status_code} {post_res.text}", flush=True)
-    time.sleep(1)
+  if post_res.status_code in [200, 201]:
+    print(
+        f"✨ 要約メッセージの投稿に成功しました ({idx + 1}/{len(chunks)})",
+        flush=True,
+    )
+  else:
+    print(
+        f"❌ 投稿失敗 ({idx + 1}/{len(chunks)}): {post_res.status_code}"
+        f" {post_res.text}",
+        flush=True,
+    )
+  time.sleep(1)
