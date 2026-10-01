@@ -59,7 +59,7 @@ print(
 )
 
 
-# 0-1. Wikiからのゲーム内イベント情報スクレイピング（期間・残り日数解析つき）
+# 0-1. Wikiからのゲーム内イベント情報スクレイピング（総力戦・大決戦・制約解除決戦含む広域取得）
 def get_bluearchive_game_events():
     url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
     req_headers = {
@@ -77,54 +77,75 @@ def get_bluearchive_game_events():
             return "現在特別なゲーム内お知らせはありません。"
 
         soup = BeautifulSoup(response.text, "html.parser")
-        events = []
         now_jst = datetime.now(timezone(timedelta(hours=9)))
-        today = now_jst.date()
+        today_dt = now_jst
 
-        # 「開催中のイベント」配下のリストを探す
-        heading = soup.find(lambda tag: tag.name in ["h2", "h3", "h4", "div"] and "開催中のイベント" in tag.text)
+        # 「開催中のイベント」セクションを広域に探索
+        heading = soup.find(lambda tag: tag.name in ["h2", "h3", "h4"] and "開催中のイベント" in tag.text)
         
-        target_container = None
+        extracted_lines = []
         if heading:
-            target_container = heading.find_next(["ul", "div", "table"])
+            # 次の見出しが来るまでの要素からリスト項目・行をすべて抽出
+            curr = heading.next_sibling
+            while curr:
+                if curr.name in ["h2", "h3", "h4"] and "開催予定" in curr.text:
+                    break
+                if hasattr(curr, "find_all"):
+                    items = curr.find_all(["li", "tr", "p"])
+                    for item in items:
+                        t = item.get_text(separator=" ", strip=True)
+                        if t and ("～" in t or "~" in t or "開催" in t):
+                            extracted_lines.append(t)
+                curr = curr.next_sibling
 
-        if not target_container:
-            # 見つからない場合は全体から検索
-            target_container = soup
+        if not extracted_lines:
+            # 見つからなかった場合は全テキスト行から抽出
+            for tag in soup.find_all(["li", "tr", "p"]):
+                t = tag.get_text(separator=" ", strip=True)
+                if t and ("～" in t or "~" in t):
+                    extracted_lines.append(t)
 
-        items = target_container.find_all("li") if target_container.name != "table" else target_container.find_all("tr")
+        events = []
+        seen = set()
 
-        for item in items:
-            text = item.get_text(separator=" ", strip=True)
-            if not text or len(text) < 5:
+        for line in extracted_lines:
+            if line in seen or len(line) < 5:
                 continue
+            seen.add(line)
 
-            # 日付パターンの正規表現（例: 2026/9/23 ～ 10/7 10:59 または 2027/1/20）
-            # カッコ内の終了日時を抽出
-            match = re.search(r"\((?:\d{4}/)?\d{1,2}/\d{1,2}[^\n~]*~\s*(?:(\d{4})/)?(\d{1,2})/(\d{1,2})\s*(\d{1,2}:\d{2})\)", text)
+            # 日時パターンの判定（例: 2026/09/23 11:00 ～ 2026/10/07 10:59 または 9/23 ～ 10/7）
+            # 終了日時をキャプチャする正規表現
+            match = re.search(r"[～~]\s*(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?", line)
             
             remaining_str = ""
             if match:
                 end_year = int(match.group(1)) if match.group(1) else now_jst.year
                 end_month = int(match.group(2))
                 end_day = int(match.group(3))
+                end_hour = int(match.group(4)) if match.group(4) else 23
+                end_minute = int(match.group(5)) if match.group(5) else 59
 
                 try:
-                    end_date = datetime(end_year, end_month, end_day).date()
-                    days_left = (end_date - today).days
-                    if days_left > 0:
-                        remaining_str = f"【残り あと {days_left} 日】"
-                    elif days_left == 0:
+                    end_dt = datetime(end_year, end_month, end_day, end_hour, end_minute, tzinfo=timezone(timedelta(hours=9)))
+                    diff = end_dt - today_dt
+
+                    if diff.total_seconds() <= 0:
                         remaining_str = "【本日終了！】"
                     else:
-                        remaining_str = "【終了間近】"
+                        days = diff.days
+                        if days >= 1:
+                            remaining_str = f"【残り あと {days} 日】"
+                        else:
+                            hours = int(diff.total_seconds() // 3600)
+                            remaining_str = f"【残り あと {hours} 時間】"
                 except Exception:
                     remaining_str = ""
 
-            events.append(f"・{text} {remaining_str}".strip())
+            events.append(f"・{line} {remaining_str}".strip())
 
         if events:
-            return "\n".join(events[:8])
+            # 最大12件まで取得
+            return "\n".join(events[:12])
 
         return "現在特別なゲーム内お知らせはありません。"
 
@@ -369,22 +390,18 @@ prompt = f"""
 【出力ルール】
 ・**同じチャンネル（<#ID>）を2度以上登場させないでください。** 1つのチャンネルで複数の話題がある場合は、インデント（下げて `- `）でぶら下げてください。
 ・広報Botらしくメンバーの熱量や情景が浮かぶ親しみやすい文末にしてください。
-・プロンプト内の例の単語をそのまま出力せず、必ず【会話ログ】に存在する内容のみを要約してください。
+・プロンプト内の例の単語をそのまま出力せず、必ず【会話ログ】や【ブルアカ最新ゲーム内イベント情報】に存在する内容のみを整理して出力してください。
 ・**本日の誕生日セクションでは、【ブルアカ生徒の本日誕生日情報】に該当者がいるか、または【会話ログ】でお祝いの話題があるかを確認してお祝いしてください。該当がない場合は「本日お誕生日のメンバー・生徒はいません。」と記載した上で、アロナらしく一言添えてください。**
-・**ブルーアーカイブ 最新ゲーム情報は、必ず各項目（イベント・総力戦/大決戦・制約解除決戦・ガチャ・キャンペーンなど）について開催期間と残り期間（あと○日など）を明記し、絵文字つきの箇条書き（`- `）で出力してください。**
-  ※総力戦・大決戦・合同火力演習などの開催情報がない場合は**「🏆 総力戦・大決戦・合同火力演習: キヴォトスは現在平和な状態です」** と記載してください。
-  ※制約解除決戦が開催中の場合は必ず対象のボス名や属性を含めて独立した行で記載してください。
+・**ブルーアーカイブ 最新ゲーム情報は、【ブルアカ最新ゲーム内イベント情報】を元に、各項目（イベント・総力戦/大決戦・制約解除決戦・ガチャ・キャンペーンなど）に振り分けて箇条書き（`- `）で出力してください。**
+  ※「ドラム缶ガニ」（ホバークラフト）などの総力戦・大決戦・制約解除決戦の情報が含まれている場合は、見落とさず必ず該当するカテゴリ（🏆 総力戦・大決戦・合同火力演習 または ⚔️ 制約解除決戦）に記載してください。
+  ※開催情報がないカテゴリのみ「🏆 総力戦・大決戦・合同火力演習: キヴォトスは現在平和な状態です」のように記載してください。
 ・**【本日のサーバーイベント】や【投票置き場】に該当がない場合も、ただ否定するのではなく、アロナらしく明るく健気に一言添えてください。**
-  （例：イベントなし → 「本日開催予定のサーバーイベントはありません。今日はのんびり過ごすチャンスですね、先生！」）
-  （例：投票なし → 「現在アクティブな投票はありません。新しいアンケートや企画の提案もお待ちしていますよ！」）
 ・目が滑らないよう、要点だけを短く・テンポ良くまとめてください。
 ・通常チャンネル名・VCチャット・フォーラムスレッド名は指定された「<#ID>」のリンク表記をそのまま使用してください。
-・【会話ログ】が空の場合は、各カテゴリに「本日の新規投稿はありません。」と書く代わりに、アロナらしく明るく健気に先生を応援する一言（例：「静かな一日ですが、先生と一緒に過ごせてアロナは幸せですよ！」など）を自然に添えてください。
+・【会話ログ】が空の場合は、各カテゴリに「本日の新規投稿はありません。」と書く代わりに、アロナらしく明るく健気に先生を応援する一言を自然に添えてください。
 
 【表現スタイル】
 ・ブルーアーカイブのアロナとして、朝の挨拶から始めてください。
-  （例：「先生！おはようございます！アロナです！今朝も準備バッチリですよ！」）
-・「昨日の盛り上がり」と「本日チェックすべき予定（イベント・投票・ゲーム最新情報）」が直感的に伝わるテンポの良い案内文にしてください。
 ・アロナらしい元気で健気な言葉遣い（「〜ですよ！」「〜ですね！」「お任せください！」など）を徹底してください。
 
 【出力フォーマット例】
@@ -401,10 +418,9 @@ prompt = f"""
 （2. 投票に関してメンバーの反応がある場合は、「💬 メンバーの反応: ○○」のように短く添えてください。なければ「新着の投票はありません。」）
 
 💙 **ブルーアーカイブ 最新ゲーム情報**
-（【ブルアカ最新ゲーム内イベント情報】を参考に、以下のように各項目の開催期間と残り期間を含めて箇条書きで1行ずつ整理してください。情報がない場合は「現在特別なゲーム内お知らせはありません。」とだけ記載してください。）
+（【ブルアカ最新ゲーム内イベント情報】を整理して記述）
 - 🎪 **イベント**: 「イベント名」（開催期間: YYYY/MM/DD ～ MM/DD） - **残り あと X 日**
 - 🏆 **総力戦・大決戦・合同火力演習**: 「ボス名・種別」（開催期間: YYYY/MM/DD ～ MM/DD） - **残り あと X 日**
-  （※開催がない場合は「🏆 決戦・演習: キヴォトスは現在平和な状態です」）
 - ⚔️ **制約解除決戦**: 「ボス名・防御属性」（開催期間: YYYY/MM/DD ～ MM/DD） - **残り あと X 日**
 - 🫐 **ピックアップ募集**: ★3生徒名が登場中！ - **残り あと X 日**
 - 🎁 **キャンペーン**: キャンペーン名実施中！ - **残り あと X 日**
@@ -413,19 +429,14 @@ prompt = f"""
 - <#1376909055091671071>
   - 【会話ログ】に基づいた話題1
   - 【会話ログ】に基づいた話題2
-- <#1389948670455185439>
-  - 【会話ログ】に基づいた話題
-（※会話があったチャンネルのみ抽出し、カテゴリ全体で5〜8行程度でまとめる。なければ「新着の会話はありません。」）
 
 ⚔️ **カテゴリ：争いの足跡**
 - <#1379058754716307516>
   - 【会話ログ】に基づいた話題
-（※会話があったチャンネルのみ抽出し、カテゴリ全体で5〜8行程度でまとめる。なければ「新着の会話はありません。」）
 
 💬 **カテゴリ：フォーラム**
 - <#スレッドID>
   - 【会話ログ】に基づいた話題
-  （※【会話ログ】に基づいた話題がなければ「新着の会話はありません。」）
 
 【ブルアカ生徒の本日誕生日情報】
 {birthday_info_text}
