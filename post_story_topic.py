@@ -14,8 +14,8 @@ FORUM_CHANNEL_ID = "1419978214394167296"
 # 利用するモデルの優先順位リスト
 FALLBACK_MODELS = [
     "gemini-3.6-flash",
-    "gemini-2.5-flash",
-    "gemini-1.5-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
 ]
 
 headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
