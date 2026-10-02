@@ -550,19 +550,34 @@ def generate_and_post(prompt_text, target_ch_id, part_title, append_footer=True)
 # =========================================================
 # ★ 4. 残り日程（折り返し＆最終日前日）のリマインド自動処理
 # =========================================================
-def process_reminders():
+def process_reminders(info_summary_text):
+    """
+    1便目の要約結果（info_summary_text）に含まれているイベント・コンテンツのみを対象にして
+    リマインド判定を行います。
+    """
     now_jst = datetime.now(timezone(timedelta(hours=9)))
     today_date = now_jst.date()
 
-    # リマインド対象となるイベントを抽出
     remind_targets = []
 
+    # 1便目の「💙 ブルーアーカイブ 最新ゲーム情報」に実際に登場したイベントだけをチェック
     for item in parsed_events_list:
         raw = item["raw_text"]
         start_dt = item["start_dt"]
         end_dt = item["end_dt"]
 
         if not end_dt:
+            continue
+
+        # 【超重要】1便目のGemini生成結果（または画面に出たテキスト）に含まれていない古いイベントは無視する
+        # (イベント名の一部が info_summary_text に含まれているかチェック)
+        event_name_clean = re.sub(
+            r"\d{1,2}/\d{1,2}.*$", "", raw
+        ).strip()  # 日付部分を除去した名称
+        if (
+            len(event_name_clean) > 3
+            and event_name_clean not in info_summary_text
+        ):
             continue
 
         remind_type = None  # '折り返し' または '最終日前日'
@@ -588,32 +603,37 @@ def process_reminders():
                 }
             )
 
-    # 【重要】リマインド対象が1つもない場合は、AI呼び出しを行わずに完全沈黙（処理終了）
+    # 該当するイベントが要約内に存在しない場合は完全沈黙
     if not remind_targets:
         print(
-            "  └ [リマインド確認] 本日は折り返し・最終日前日の対象イベントがないため沈黙します。",
+            "  └ [リマインド確認] 本日の要約に含まれる対象イベントでリマインド該当のものがないため沈黙します。",
             flush=True,
         )
         return
 
-    # 対象がある場合のみ以下のAI生成＆投稿処理を実行
+    # リマインド生成・投稿処理 (以下同文)
     for target in remind_targets:
         raw = target["raw"]
         remind_type = target["remind_type"]
 
-        # バトル系コンテンツの判定 (総力戦・大決戦・合同火力演習・制約解除決戦)
+        # バトル系コンテンツの判定
         is_battle = any(
-            k in raw for k in ["総力戦", "大決戦", "合同火力演習", "制約解除決戦"]
+            k in raw
+            for k in [
+                "総力戦",
+                "大決戦",
+                "合同火力演習",
+                "制約解除決戦",
+            ]
         )
 
         if is_battle:
-            # チャンネルの振り分け
             if "合同火力演習" in raw:
-                target_ch = "1380191122948624517"  # 合同火力演習チャンネル
+                target_ch = "1380191122948624517"
             elif "制約解除決戦" in raw:
-                target_ch = "1386327021704974478"  # 制約解除決戦チャンネル
+                target_ch = "1386327021704974478"
             else:
-                target_ch = BATTLE_CHANNEL_ID  # 総力戦・大決戦チャンネル
+                target_ch = BATTLE_CHANNEL_ID
 
             prompt_remind = f"""
 あなたは「ブルーアーカイブ」のアロナとプラナです。
@@ -621,7 +641,7 @@ Discordサーバー「足跡の化石」のバトル系専用チャンネルの�
 
 【対象コンテンツ】
 ・概要：{raw}
-・タイミング：{remind_type}（明日午前11:00メンテナンス終了）
+・タイミング：{remind_type}
 
 【出力・表現ルール】
 ・アロナとプラナの「2人の掛け合い（会話形式）」で作成してください。
@@ -633,7 +653,6 @@ Discordサーバー「足跡の化石」のバトル系専用チャンネルの�
 【フォーマット】
 **アロナ**: 「〜」
 **プラナ**: 「〜」
-**アロナ**: 「〜」
 """
             print(
                 f"  └ [リマインド送信] バトル系 ({raw}): {remind_type}",
@@ -647,26 +666,7 @@ Discordサーバー「足跡の化石」のバトル系専用チャンネルの�
             )
 
         else:
-            # --- イベントストーリー系リマインド ---
             target_ch = TALK_CHANNEL_ID
-
-            # フォーラム検索（「ブルアカストーリー感想」タグまたはイベント名が含まれるか確認）
-            matched_forum_link = None
-            for th_name, th_id in forum_threads_map.items():
-                # イベント名が含まれるか、または「ブルアカストーリー感想」関連のスレッドか判定
-                if (
-                    "ブルアカストーリー感想" in th_name
-                    or any(keyword in raw for keyword in [th_name, "イベント"])
-                ):
-                    matched_forum_link = f"<#{th_id}>"
-                    break
-
-            forum_info_str = (
-                f"関連感想フォーラム: {matched_forum_link}"
-                if matched_forum_link
-                else "関連フォーラム: なし"
-            )
-
             prompt_remind = f"""
 あなたは「ブルーアーカイブ」のアロナとプラナです。
 Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの先生（メンバー）に向けてリマインドを出してください。
@@ -674,7 +674,6 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 【対象イベント】
 ・概要：{raw}
 ・タイミング：{remind_type}
-・{forum_info_str}
 
 【出力・表現ルール】
 ・アロナとプラナの「2人の掛け合い（会話形式）」で作成してください。
@@ -682,11 +681,9 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 ・**プラナ**: 冷静沈着、アロナをナイスフォローする。
 ・【折り返しの場合】：イベントストーリーの読了状況やショップ交換の進捗に触れてください。フォーラムリンクがある場合は「感想スレッド（{matched_forum_link or ''}）への書き込み」も促してください。
 ・【最終日前日の場合】：明日11:00メンテ開始の注意喚起、ショップ交換やイベントPt・チャレンジのやり残しチェックを促してください。
-
 【フォーマット】
 **アロナ**: 「〜」
 **プラナ**: 「〜」
-**アロナ**: 「〜」
 """
             print(
                 f"  └ [リマインド送信] イベント系 ({raw}): {remind_type}",
@@ -698,6 +695,26 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
                 f"リマインド(イベント-{remind_type})",
                 append_footer=False,
             )
+# =========================================================
+# 実行部での受け渡し
+# =========================================================
+print("[5/6] 1つ目のメッセージ（お知らせ編）を生成＆投稿中...", flush=True)
+# generate_and_post が生成したテキストを返すように改修し、それを変数に格納
+info_summary_text = generate_and_post(prompt_info, TARGET_CHANNEL_ID, "お知らせ編")
+
+time.sleep(3)
+
+print("[6/6] 2つ目のメッセージ（会話要約編）を生成＆投稿中...", flush=True)
+generate_and_post(prompt_chat, TARGET_CHANNEL_ID, "会話要約編")
+
+time.sleep(3)
+
+print(
+    "[補足] 残り日程（折り返し＆最終日前日）のリマインド判定＆実行中...",
+    flush=True,
+)
+# 1便目の要約テキストを渡してリマインド判定を実行！
+process_reminders(info_summary_text)
 # =========================================================
 # 実行部
 # =========================================================
