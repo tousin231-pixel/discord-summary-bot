@@ -88,17 +88,15 @@ def get_bluearchive_game_events():
         
         extracted_lines = []
         if heading:
-            curr = heading.next_sibling
+            curr = heading.next_element
             while curr:
-                if curr.name in ["h2", "h3", "h4"] and "開催予定" in curr.text:
+                if getattr(curr, "name", None) in ["h2", "h3", "h4"] and any(k in curr.text for k in ["開催予定", "過去", "終了"]):
                     break
-                if hasattr(curr, "find_all"):
-                    items = curr.find_all(["li", "tr", "p"])
-                    for item in items:
-                        t = item.get_text(separator=" ", strip=True)
-                        if t and ("～" in t or "~" in t or "開催" in t):
-                            extracted_lines.append(t)
-                curr = curr.next_sibling
+                if getattr(curr, "name", None) in ["li", "tr", "p"]:
+                    t = curr.get_text(separator=" ", strip=True)
+                    if t and ("～" in t or "~" in t or "開催" in t):
+                        extracted_lines.append(t)
+                curr = curr.next_element
 
         if not extracted_lines:
             for tag in soup.find_all(["li", "tr", "p"]):
@@ -139,8 +137,12 @@ def get_bluearchive_game_events():
                 try:
                     if e_month and e_day:
                         end_dt = datetime(e_year, e_month, e_day, e_hour, e_min, tzinfo=timezone(timedelta(hours=9)))
-                        diff = end_dt - today_dt
+                        
+                        # 終了済みの古いイベントはスキップ
+                        if end_dt < today_dt:
+                            continue
 
+                        diff = end_dt - today_dt
                         if diff.total_seconds() <= 0:
                             remaining_str = "【本日終了！】"
                         else:
@@ -546,6 +548,9 @@ def generate_and_post(prompt_text, target_ch_id, part_title, append_footer=True)
             )
             time.sleep(1)
 
+    # ★ 1便目の生成文面を呼び出し元へ返却する
+    return summary_text or ""
+
 
 # =========================================================
 # ★ 4. 残り日程（折り返し＆最終日前日）のリマインド自動処理
@@ -555,6 +560,10 @@ def process_reminders(info_summary_text):
     1便目の要約結果（info_summary_text）に含まれているイベント・コンテンツのみを対象にして
     リマインド判定を行います。
     """
+    if not info_summary_text:
+        print("  └ [リマインド確認] 1便目の要約テキストが取得できなかったためスキップします。", flush=True)
+        return
+
     now_jst = datetime.now(timezone(timedelta(hours=9)))
     today_date = now_jst.date()
 
@@ -569,11 +578,13 @@ def process_reminders(info_summary_text):
         if not end_dt:
             continue
 
-        # 【超重要】1便目のGemini生成結果（または画面に出たテキスト）に含まれていない古いイベントは無視する
-        # (イベント名の一部が info_summary_text に含まれているかチェック)
+        # 1便目のGemini生成結果に含まれていないイベントは無視する
+        # (日付や時間表記を除去したキーワードを取り出しチェック)
         event_name_clean = re.sub(
             r"\d{1,2}/\d{1,2}.*$", "", raw
-        ).strip()  # 日付部分を除去した名称
+        ).strip()
+        
+        # タイトル要素が1便目の要約に含まれているか判定
         if (
             len(event_name_clean) > 3
             and event_name_clean not in info_summary_text
@@ -611,12 +622,12 @@ def process_reminders(info_summary_text):
         )
         return
 
-    # リマインド生成・投稿処理 (以下同文)
+    # リマインド生成・投稿処理
     for target in remind_targets:
         raw = target["raw"]
         remind_type = target["remind_type"]
 
-        # バトル系コンテンツの判定
+        # バトル系コンテンツの判定（ボス名やキーワードを追加）
         is_battle = any(
             k in raw
             for k in [
@@ -679,8 +690,9 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 ・アロナとプラナの「2人の掛け合い（会話形式）」で作成してください。
 ・**アロナ**: 明るく元気、健気。
 ・**プラナ**: 冷静沈着、アロナをナイスフォローする。
-・【折り返しの場合】：イベントストーリーの読了状況やショップ交換の進捗に触れてください。フォーラムリンクがある場合は「感想スレッド（{matched_forum_link or ''}）への書き込み」も促してください。
+・【折り返しの場合】：イベントストーリーの読了状況やショップ交換の進捗に触れてください。
 ・【最終日前日の場合】：明日11:00メンテ開始の注意喚起、ショップ交換やイベントPt・チャレンジのやり残しチェックを促してください。
+
 【フォーマット】
 **アロナ**: 「〜」
 **プラナ**: 「〜」
@@ -695,11 +707,12 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
                 f"リマインド(イベント-{remind_type})",
                 append_footer=False,
             )
+
+
 # =========================================================
-# 実行部での受け渡し
+# 実行部
 # =========================================================
 print("[5/6] 1つ目のメッセージ（お知らせ編）を生成＆投稿中...", flush=True)
-# generate_and_post が生成したテキストを返すように改修し、それを変数に格納
 info_summary_text = generate_and_post(prompt_info, TARGET_CHANNEL_ID, "お知らせ編")
 
 time.sleep(3)
@@ -709,24 +722,5 @@ generate_and_post(prompt_chat, TARGET_CHANNEL_ID, "会話要約編")
 
 time.sleep(3)
 
-print(
-    "[補足] 残り日程（折り返し＆最終日前日）のリマインド判定＆実行中...",
-    flush=True,
-)
-# 1便目の要約テキストを渡してリマインド判定を実行！
-process_reminders(info_summary_text)
-# =========================================================
-# 実行部
-# =========================================================
-print("[5/6] 1つ目のメッセージ（お知らせ編）を生成＆投稿中...", flush=True)
-generate_and_post(prompt_info, TARGET_CHANNEL_ID, "お知らせ編")
-
-time.sleep(3)
-
-print("[6/6] 2つ目のメッセージ（会話要約編）を生成＆投稿中...", flush=True)
-generate_and_post(prompt_chat, TARGET_CHANNEL_ID, "会話要約編")
-
-time.sleep(3)
-
 print("[補足] 残り日程（折り返し＆最終日前日）のリマインド判定＆実行中...", flush=True)
-process_reminders()
+process_reminders(info_summary_text)
