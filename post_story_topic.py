@@ -1,6 +1,7 @@
 import os
 import random
 import re
+import time
 from google import genai
 import requests
 
@@ -9,6 +10,13 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 TARGET_CHANNEL_ID = "1376909055091671071"
 FORUM_CHANNEL_ID = "1419978214394167296"
+
+# 利用するモデルの優先順位リスト
+FALLBACK_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash",
+]
 
 headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
 
@@ -22,12 +30,11 @@ def get_target_forum_threads():
     )
     if forum_res.status_code != 200:
         print(f"⚠️ フォーラム情報取得失敗: {forum_res.status_code}", flush=True)
-        return [], {}, {}
+        return [], set(), {}
 
     forum_data = forum_res.json()
     available_tags = forum_data.get("available_tags", [])
 
-    # タグ名とIDのマッピングを作成
     tag_id_to_name = {}
     story_tag_ids = set()
     ba_tag_ids = set()
@@ -47,7 +54,7 @@ def get_target_forum_threads():
 
     if not target_tag_ids:
         print("⚠️ 対象となるタグが見つかりませんでした。", flush=True)
-        return [], {}, {}
+        return [], set(), {}
 
     guild_id = forum_data.get("guild_id")
     all_threads = []
@@ -105,6 +112,39 @@ def get_thread_first_message(thread_id):
     return ""
 
 
+def generate_content_with_fallback(client, prompt):
+    """
+    各モデルで最大3回チャレンジし、駄目なら次のモデルへ切り替えます。
+    """
+    for model_name in FALLBACK_MODELS:
+        print(f"🤖 モデル [{model_name}] で生成を試みます...", flush=True)
+        for attempt in range(1, 4):
+            try:
+                response = client.models.generate_content(
+                    model=model_name, contents=prompt
+                )
+                if response and response.text:
+                    print(
+                        f"  └  成功！ (モデル: {model_name}, 試行回数: {attempt}回目)",
+                        flush=True,
+                    )
+                    return response.text
+            except Exception as e:
+                print(
+                    f"  └ ⚠️ [{model_name}] 試行 {attempt}/3 失敗: {e}",
+                    flush=True,
+                )
+                if attempt < 3:
+                    time.sleep(3)  # 3秒待ってリトライ
+
+        print(
+            f"🔄 [{model_name}] で3回失敗したため、次のモデルへ切り替えます...",
+            flush=True,
+        )
+
+    return None
+
+
 def main():
     threads, story_tag_ids, tag_id_to_name = get_target_forum_threads()
     if not threads:
@@ -117,7 +157,6 @@ def main():
     thread_name = selected_thread.get("name", "無題のスレッド")
     applied_tags = set(selected_thread.get("applied_tags", []))
 
-    # 「ストーリー感想」のタグが含まれているかチェック
     is_story = bool(applied_tags & story_tag_ids)
 
     print(
@@ -127,7 +166,7 @@ def main():
 
     first_msg = get_thread_first_message(thread_id)
 
-# タグに応じた分岐指示の作成
+    # タグに応じた分岐指示の作成
     if is_story:
         corner_title = "📖 **【アロナのストーリー思い出発掘コーナー】**"
         topic_instruction = """
@@ -171,28 +210,25 @@ Discordサーバーの「ブルアカ雑談」チャンネルの先生（メン�
 **アロナ**: 「〜」
 """
 
-    print("[4/4] Gemini APIによる紹介文生成中...", flush=True)
+    print("[4/4] Gemini APIによる紹介文生成を開始します...", flush=True)
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.6-flash", contents=prompt
-        )
-        if response and response.text:
-            content = response.text
+    # 3回挑戦＆モデル切り替え付き生成
+    generated_text = generate_content_with_fallback(client, prompt)
 
-            res = requests.post(
-                f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}/messages",
-                headers=headers,
-                json={"content": content},
-                timeout=10,
-            )
-            if res.status_code in [200, 201]:
-                print("🎉 正常に雑談チャンネルへ投稿完了しました！", flush=True)
-            else:
-                print(f"⚠ Discord投稿エラー: {res.status_code} - {res.text}", flush=True)
-    except Exception as e:
-        print(f"⚠️ 生成・投稿エラー: {e}", flush=True)
+    if generated_text:
+        res = requests.post(
+            f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}/messages",
+            headers=headers,
+            json={"content": generated_text},
+            timeout=10,
+        )
+        if res.status_code in [200, 201]:
+            print("🎉 正常に雑談チャンネルへ投稿完了しました！", flush=True)
+        else:
+            print(f"⚠ Discord投稿エラー: {res.status_code} - {res.text}", flush=True)
+    else:
+        print("❌ 全てのモデルとリトライで生成に失敗しました。", flush=True)
 
 
 if __name__ == "__main__":
