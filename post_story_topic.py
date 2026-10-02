@@ -22,22 +22,32 @@ def get_target_forum_threads():
     )
     if forum_res.status_code != 200:
         print(f"⚠️ フォーラム情報取得失敗: {forum_res.status_code}", flush=True)
-        return []
+        return [], {}, {}
 
     forum_data = forum_res.json()
     available_tags = forum_data.get("available_tags", [])
 
-    target_tag_ids = set()
-    for tag in available_tags:
-        tag_name = tag.get("name", "")
-        if "ブルアカ" in tag_name or "ストーリー感想" in tag_name:
-            target_tag_ids.add(tag.get("id"))
+    # タグ名とIDのマッピングを作成
+    tag_id_to_name = {}
+    story_tag_ids = set()
+    ba_tag_ids = set()
 
-    print(f"  └ 該当タグID: {target_tag_ids}", flush=True)
+    for tag in available_tags:
+        t_id = tag.get("id")
+        t_name = tag.get("name", "")
+        tag_id_to_name[t_id] = t_name
+
+        if "ストーリー" in t_name:
+            story_tag_ids.add(t_id)
+        elif "ブルアカ" in t_name:
+            ba_tag_ids.add(t_id)
+
+    target_tag_ids = story_tag_ids | ba_tag_ids
+    print(f"  └ 対象タグ: {tag_id_to_name}", flush=True)
 
     if not target_tag_ids:
         print("⚠️ 対象となるタグが見つかりませんでした。", flush=True)
-        return []
+        return [], {}, {}
 
     guild_id = forum_data.get("guild_id")
     all_threads = []
@@ -79,7 +89,7 @@ def get_target_forum_threads():
             matched_threads.append(th)
 
     print(f"  └ 条件にマッチしたスレッド数: {len(matched_threads)} 件", flush=True)
-    return matched_threads
+    return matched_threads, story_tag_ids, tag_id_to_name
 
 
 def get_thread_first_message(thread_id):
@@ -96,22 +106,48 @@ def get_thread_first_message(thread_id):
 
 
 def main():
-    threads = get_target_forum_threads()
+    threads, story_tag_ids, tag_id_to_name = get_target_forum_threads()
     if not threads:
         print("⚠️ 該当するフォーラムスレッドが見つからなかったため終了します。", flush=True)
         return
 
+    # ランダムに1つ選定
     selected_thread = random.choice(threads)
     thread_id = selected_thread["id"]
     thread_name = selected_thread.get("name", "無題のスレッド")
+    applied_tags = set(selected_thread.get("applied_tags", []))
 
-    print(f"[3/4] ピックアップした話題: 「{thread_name}」(<#{thread_id}>)", flush=True)
+    # 「ストーリー感想」のタグが含まれているかチェック
+    is_story = bool(applied_tags & story_tag_ids)
+
+    print(
+        f"[3/4] ピックアップした話題: 「{thread_name}」 (ストーリー属性: {is_story})",
+        flush=True,
+    )
 
     first_msg = get_thread_first_message(thread_id)
 
+# タグに応じた分岐指示の作成
+    if is_story:
+        corner_title = "📖 **【アロナのストーリー思い出発掘コーナー】**"
+        topic_instruction = """
+・【話題タイプ】：ストーリー・シナリオ感想
+・アロナ：元気いっぱいに「先生！昔こんなストーリーの話題で盛り上がっていましたよ！」と切り出す。
+・プラナ：冷静にそのストーリーの見どころや当時の先生方の感動・反応を補足する。
+・締めくくり：「先生方はこのストーリーのどのシーンが好きですか？」「ぜひ当時の感想や思い出を語り合ってみてくださいね！」とストーリー雑談を促す。
+"""
+    else:
+        corner_title = "🎉 **【アロナのプレイ＆イベント過去ログ発掘コーナー】**"
+        topic_instruction = """
+・【話題タイプ】：ゲームプレイ（ガチャ・攻略）またはリアルイベント・生放送・コラボ等
+・アロナ：元気いっぱいに「先生！昔こんなイベントや話題で盛り上がっていましたよ！」と切り出す。
+・プラナ：冷静にそのスレッドの話題（ガチャ・攻略報告、生放送やDJライブ・スタンプラリー等のリアルイベントの思い出など）を補足する。
+・締めくくり：「先生方も当時の思い出や現地での思い出はどうでしたか？」「ぜひ振り返って語り合ってみてくださいね！」と雑談を促す。
+"""
+
     prompt = f"""
 あなたは「ブルーアーカイブ」のアロナとプラナです。
-Discordサーバー「足跡の化石」の「ブルアカ雑談」チャンネルの先生（メンバー）に向けて、過去にフォーラムで盛り上がったストーリーや感想の話題を1つピックアップして紹介し、雑談のきっかけを作ってください。
+Discordサーバーの「ブルアカ雑談」チャンネルの先生（メンバー）に向けて、過去にフォーラムで盛り上がった話題を1つピックアップして紹介し、雑談のきっかけを作ってください。
 
 【紹介する話題】
 ・スレッド名: {thread_name}
@@ -119,14 +155,16 @@ Discordサーバー「足跡の化石」の「ブルアカ雑談」チャンネ�
 ・最初の投稿内容抜粋:
 {first_msg[:300]}
 
-【出力・表現ルール】
-・アロナとプラナの掛け合い（会話形式）で作成してください。
-・アロナ：元気いっぱいに「先生！昔こんなストーリーの話題で盛り上がっていましたよ！」と切り出す。
-・プラナ：冷静にそのスレッドの内容や見どころを補足する。
-・最後にメッセージ内でスレッドリンク（<#{thread_id}>）を案内し、「先生方はこのストーリーのどのシーンが好きですか？」「ぜひ当時の感想や思い出を語り合ってみてくださいね！」と雑談を促して締めてください。
+【話題に応じた出力指示】
+{topic_instruction}
 
-【フォーマット】
-📖 **【アロナの過去ログ発掘コーナー】**
+【フォーマットルール】
+・アロナとプラナの掛け合い（会話形式）で作成してください。
+・タイトルは必ず「{corner_title}」から始めてください。
+・メッセージの途中で必ずスレッドリンク（<#{thread_id}>）を案内してください。
+
+【出力フォーマット】
+{corner_title}
 
 **アロナ**: 「〜」
 **プラナ**: 「〜」
