@@ -99,17 +99,33 @@ def get_target_forum_threads():
     return matched_threads, story_tag_ids, tag_id_to_name
 
 
-def get_thread_first_message(thread_id):
+def get_thread_recent_messages(thread_id, limit=50):
+    """
+    スレッド内のメッセージを取得し、時系列順（古い順）に結合して返します。
+    """
     res = requests.get(
-        f"https://discord.com/api/v10/channels/{thread_id}/messages?limit=1&after=0",
+        f"https://discord.com/api/v10/channels/{thread_id}/messages?limit={limit}",
         headers=headers,
         timeout=10,
     )
     if res.status_code == 200:
         msgs = res.json()
         if msgs:
-            return msgs[0].get("content", "")
-    return ""
+            # Discord APIは新しい順で返ってくるため、時系列順（古い→新しい）に反転させる
+            msgs.reverse()
+            
+            combined_text = []
+            for m in msgs:
+                author = m.get("author", {}).get("username", "メンバー")
+                content = m.get("content", "").strip()
+                attachments = len(m.get("attachments", []))
+                attach_info = f" [画像等{attachments}件添付]" if attachments > 0 else ""
+
+                if content or attach_info:
+                    combined_text.append(f"・{author}: {content}{attach_info}")
+
+            return "\n".join(combined_text)
+    return "（投稿内容が取得できませんでした）"
 
 
 def generate_content_with_fallback(client, prompt):
@@ -164,7 +180,8 @@ def main():
         flush=True,
     )
 
-    first_msg = get_thread_first_message(thread_id)
+    # ★ 1件取得（get_thread_first_message）から、最大15件を取得する関数に変更
+    thread_messages = get_thread_recent_messages(thread_id, limit=15)
 
     # ★ タグに応じた分岐指示（ネタバレ解禁方針をここに一括統合）
     if is_story:
@@ -172,6 +189,11 @@ def main():
         topic_instruction = """
 ・【話題タイプ】：ストーリー・シナリオ感想
 ・【ネタバレ方針】：ネタバレ全開OK！遠慮せずにストーリーの核心、黒幕や衝撃展開、名シーン、登場生徒の熱いセリフにしっかり踏み込んで語ってください。
+・【内容に応じた柔軟な対応ルール】：
+  - スレッドの本文や会話に具体的にストーリーの感想や展開が書かれている場合：
+    → アロナとプラナでその場面や登場生徒の熱い展開を語り合い、「先生方はあのシーンどう思いましたか？」と語り合いを促す。
+  - 画像のみ・作業連絡・短文・あるいは投稿自体がまだ少ない場合：
+    → 無理にストーリー内容を捏造・ごまかさず、「ここでは画像作成や共有が行われていたみたいですよ！」「まだテキストの感想が少ないスレッドなので、ぜひ先生方の熱い思い出や感想を一番乗りで書き込んでみてくださいね！」と素直に状況を伝えて書き込み・雑談を促す。
 ・アロナ：元気いっぱいに話題を切り出し、「まさかあの展開になるとは思いませんでしたよね！」のようにストーリーの盛り上がりポイントにはしゃぐ。
 ・プラナ：冷静に作中の具体的な展開や見どころ、伏線、登場生徒の活躍シーン（ネタバレ含む）を詳細に補足・深掘りする。
 ・締めくくり：「先生方はあのシーンの〜はどう思いましたか？」「〜の展開、本当に熱かったですよね！」と具体的・核心的な場面を挙げてストーリー雑談を促す。
@@ -181,6 +203,11 @@ def main():
         topic_instruction = """
 ・【話題タイプ】：ゲームプレイ（ガチャ・攻略）またはリアルイベント・生放送・コラボ、雑談など。
 ・【ネタバレ方針】：ネタバレ全開OK！雑談中に出たネタバレの話題も取り扱ってください！
+・【★重要：内容に応じた柔軟な対応ルール】：
+  - ガチャ結果、攻略報告、イベントの思い出などがしっかり書かれている場合：
+    → アロナが元気いっぱいに話題を切り出し、プラナが当時の状況や思い出（ガチャの引き、イベントの熱気など）を冷静に補足する。
+  - 画像のみの投稿、短文、作業・検証ログ、あるいは投稿が少ない場合：
+    → 無理に話題を作り捏造せず、「ここではガチャ結果の共有や作業が行われていたみたいです！」「当時の思い出や報告をぜひ追加で書き込んでみてくださいね！」のように状況を素直に伝えて雑談や報告を促す。
 ・アロナ：元気いっぱいに「先生！昔こんなイベントや話題で盛り上がっていましたよ！」と切り出す。
 ・プラナ：冷静にそのスレッドの話題（ガチャ・攻略報告、生放送やDJライブ・スタンプラリー等のリアルイベントの思い出など）を補足する。
 ・締めくくり：「先生方も当時の思い出や現地での思い出はどうでしたか？」「ぜひ振り返って語り合ってみてくださいね！」と雑談を促す。
@@ -196,8 +223,8 @@ Discordサーバー「足跡の化石」の「ブルアカ雑談」チャンネ�
 【紹介する話題】
 ・スレッド名: {thread_name}
 ・スレッドリンク: <#{thread_id}>
-・最初の投稿内容抜粋:
-{first_msg[:300]}
+・スレッド内の書き込みログ（時系列順）:
+{thread_messages[:5000]}
 
 【話題に応じた出力指示】
 {topic_instruction}
@@ -231,7 +258,7 @@ Discordサーバー「足跡の化石」の「ブルアカ雑談」チャンネ�
         if res.status_code in [200, 201]:
             print("🎉 正常に雑談チャンネルへ投稿完了しました！", flush=True)
         else:
-            print(f"⚠ Discord投稿エラー: {res.status_code} - {res.text}", flush=True)
+            print(f"⚠️ Discord投稿エラー: {res.status_code} - {res.text}", flush=True)
     else:
         print("❌ 全てのモデルとリトライで生成に失敗しました。", flush=True)
 
