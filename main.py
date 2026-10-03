@@ -333,21 +333,31 @@ for cat_name, channels in CHANNELS.items():
         )
         if res.status_code == 200:
             messages = res.json()
-            ch_msgs = []
-            for msg in reversed(messages):
-                msg_time = datetime.fromisoformat(
-                    msg["timestamp"].replace("Z", "+00:00")
-                )
-                if msg_time >= yesterday and not msg.get("author", {}).get(
-                    "bot", False
-                ):
-                    author = msg.get("author", {}).get("username", "Unknown")
-                    content = msg.get("content", "")
-                    if content:
-                        ch_msgs.append(f"{author}: {content}")
-
-            if ch_msgs:
-                collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
+            # メッセージ収集部分の修正
+ch_msgs = []
+for msg in reversed(messages):
+    msg_time = datetime.fromisoformat(
+        msg["timestamp"].replace("Z", "+00:00")
+    )
+    if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
+        author = msg.get("author", {}).get("username", "Unknown")
+        content = msg.get("content", "")
+        
+        if content:
+            msg_jst = msg_time.astimezone(timezone(timedelta(hours=9)))
+            time_str = msg_jst.strftime("%H:%M")
+            
+            # ★ 返信機能（referenced_message）のチェック
+            ref_info = ""
+            ref_msg = msg.get("referenced_message")
+            if ref_msg:
+                ref_author = ref_msg.get("author", {}).get("username", "Unknown")
+                ref_content = ref_msg.get("content", "")
+                # 参照先の文頭を短く引用 (20文字程度)
+                ref_snippet = (ref_content[:20] + "...") if len(ref_content) > 20 else ref_content
+                ref_info = f" (↩️ {ref_author}の「{ref_snippet}」への返信)"
+            
+            ch_msgs.append(f"[{time_str}] {author}{ref_info}: {content}")
 
 collected_data["フォーラム"] = {}
 forum_threads_map = {} # スレッド情報マップ (名前 -> ID)
@@ -396,7 +406,8 @@ for cat_name, channels in collected_data.items():
     if channels:
         logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
         for ch_tag, msgs in channels.items():
-            logs_body += f"--- {ch_tag} ---\n"
+            authors = set(m.split("] ")[1].split(":")[0] for m in msgs if "] " in m and ":" in m.split("] ")[1])
+            logs_body += f"--- {ch_tag} (投稿数: {len(msgs)}件 / 発言者数: {len(authors)}人) ---\n"
             logs_body += "\n".join(msgs) + "\n"
 
 if not logs_body.strip():
@@ -486,9 +497,17 @@ prompt_chat = f"""
 ・アロナらしいリアクション（感嘆符、先生への呼びかけ、応援など）を自然に交えて表現してください。
 ・同じチャンネル（<#ID>）を2度以上登場させないでください。
 ・1つの箇条書きが長くなって読みにくくなるのを防ぐため、チャンネル内で複数の話題がある場合は、箇条書きを改行（- や  ・）で分けて1話ずつテンポよく報告してください。
-・話題の量に応じたメリハリ：
-  - 【話題が少ない・静かなチャンネル】：サクッと1〜2行でアロナらしく報告
-  - 【攻略や話題で大盛り上がりのチャンネル】：アロナも興奮気味に、複数の箇条書きに分けてじっくり報告
+
+【話題の件数・規模に応じた誇張防止ルール】
+・**投稿が1〜2件程度の単発の話題・つぶやきに対して、「盛り上がった」「持ちきり」「大激論」「議論が交わされた」などの大げさな表現を絶対に使わないでください。**
+・**1件だけのつぶやきや投稿の場合**は、「〇〇についての投稿がありました！」「〇〇という興味深いお話が届いていましたよ！」など、事実に基づいたトーン（投稿・紹介された事実のみ）で短く報告してください。
+・複数人がやり取りしている場合や、メッセージ件数が多い話題のみ「～で盛り上がっていました」「～の話題で持ちきりでした」表現を使ってください。
+・ログが全体的に少ないチャンネル（または単発の書き込みしかないチャンネル）は無理に長く書かず、1～2行でシンプルに報告してください。
+
+【時間経過と返信機能（↩️）に関する判断ルール】
+・ログには `[HH:MM]` の投稿時刻と、返信機能が使われた場合の `(↩️ 〇〇の「...」への返信)` が含まれます。
+・時間が数時間離れていても、`(↩️ ...への返信)` がある場合は「過去の話題への反応・継続」として同じ話題として扱ってください。
+・返信機能がない状態で数時間以上間隔が空いている場合は、新しい話題・単発のつぶやきとして判断してください。
 ・最後に、昨日の様子を見たアロナからの「締めくくりの感想＆先生への労いメッセージ」をしっかり添えてください。
 
 【フォーラムカテゴリの出力ルール】
@@ -716,6 +735,11 @@ Discordサーバー「足跡の化石」のバトル系専用チャンネルの�
 ・「メンテナンス」については、入力データ内に「〇月〇日 メンテ実施」等の明確な記載がない限り、絶対に「明日メンテナンスがある」「メンテナンスに注意」等の発言を含めないでください。
 ・イベントの種別（総力戦、大決戦、合同火力演習、制約解除決戦など）を勝手に変更・混同しないでください。
 
+【★時間経過と返信機能（↩️）に関する判断ルール】
+・ログには `[HH:MM]` の投稿時刻と、返信機能が使われた場合の `(↩️ 〇〇の「...」への返信)` が含まれます。
+・時間が数時間離れていても、`(↩️ ...への返信)` がある場合は「過去の話題への反応・継続」として同じ話題として扱ってください。
+・返信機能がない状態で数時間以上間隔が空いている場合は、新しい話題・単発のつぶやきとして判断してください。
+
 【フォーマット例】
 **アロナ**: 「〜〜（1言目）」
 **プラナ**: 「〜〜（補足・データ）」
@@ -762,6 +786,11 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 ・提供されたイベント情報・Wikiテキストに書かれている事実のみに基づいて出力してください。
 ・「メンテナンス」については、入力データ内に「〇月〇日 メンテ実施」等の明確な記載がない限り、絶対に「明日メンテナンスがある」「日付が変わったら早めの消化を」等の発言を含めないでください。
 ・イベントの種別を勝手に変更・混同しないでください。
+
+【★時間経過と返信機能（↩️）に関する判断ルール】
+・ログには `[HH:MM]` の投稿時刻と、返信機能が使われた場合の `(↩️ 〇〇の「...」への返信)` が含まれます。
+・時間が数時間離れていても、`(↩️ ...への返信)` がある場合は「過去の話題への反応・継続」として同じ話題として扱ってください。
+・返信機能がない状態で数時間以上間隔が空いている場合は、新しい話題・単発のつぶやきとして判断してください。
 
 【フォーマット例】
 **アロナ**: 「〜〜（1言目）」
