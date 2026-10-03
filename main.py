@@ -593,19 +593,25 @@ def process_reminders(info_summary_text, logs_body):
         remind_type = None  # '折り返し' または '最終日前日'
         
         # 予定日の計算
-        last_day_remind_date = (end_dt.date() - timedelta(days=1))
-        mid_date = None
+        # 日付（date）のみで比較（朝5:00実行前提）
+        end_date = end_dt.date()  # 10/07
         
+        # 1. 最終日前日（終了日の1日前 ＝ 10/06）
+        last_day_remind_date = end_date - timedelta(days=1)
+        
+        mid_date = None
         if start_dt:
-            total_duration = end_dt - start_dt
-            half_days = total_duration.days // 2
-            if total_duration.days >= 4:
-                mid_date = (start_dt + timedelta(days=half_days)).date()
+            start_date = start_dt.date()  # 9/30
+            total_days = (end_date - start_date).days  # 7日間
+            
+            # 5日以上開催のイベントは「開始日 + 3日（＝10/03）」を折り返し実行日に設定
+            # ※10/04にしたい場合は days=4 に変更してください
+            if total_days >= 5:
+                mid_date = start_date + timedelta(days=3)
 
-        # 1. 最終日前日判定 (終了日の1日前)
+        # 判定（日付完全一致なので該当日にそれぞれ1回だけ発動）
         if last_day_remind_date == today_date:
             remind_type = "最終日前日"
-        # 2. 折り返し地点判定 (開始・終了がある場合)
         elif mid_date and mid_date == today_date:
             remind_type = "折り返し"
 
