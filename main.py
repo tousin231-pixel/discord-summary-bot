@@ -78,6 +78,7 @@ def get_bluearchive_game_events():
         response.encoding = response.apparent_encoding
 
         if response.status_code != 200:
+            print(f"⚠️ Wikiステータスコード異常: {response.status_code}", flush=True)
             return "現在特別なゲーム内お知らせはありません。", []
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -103,6 +104,8 @@ def get_bluearchive_game_events():
                 t = tag.get_text(separator=" ", strip=True)
                 if t and ("～" in t or "~" in t):
                     extracted_lines.append(t)
+
+        print(f"  └ [Wiki取得] 抽出行数: {len(extracted_lines)} 件", flush=True)
 
         events_text_list = []
         parsed_events = []
@@ -134,6 +137,10 @@ def get_bluearchive_game_events():
                 e_hour = int(match.group(9)) if match.group(9) else 23
                 e_min = int(match.group(10)) if match.group(10) else 59
 
+                # 年跨ぎ（例: 12月〜1月）の補正処理
+                if s_month and e_month and s_month > e_month and not match.group(6):
+                    e_year = s_year + 1
+
                 try:
                     if e_month and e_day:
                         end_dt = datetime(e_year, e_month, e_day, e_hour, e_min, tzinfo=timezone(timedelta(hours=9)))
@@ -155,8 +162,8 @@ def get_bluearchive_game_events():
                     
                     if s_month and s_day:
                         start_dt = datetime(s_year, s_month, s_day, 11, 0, tzinfo=timezone(timedelta(hours=9)))
-                except Exception:
-                    pass
+                except Exception as ex:
+                    print(f"    ⚠️ 日付変換エラー ({line}): {ex}", flush=True)
 
             events_text_list.append(f"・{line} {remaining_str}".strip())
             parsed_events.append({
@@ -515,6 +522,25 @@ prompt_chat = f"""
 # =========================================================
 # 3. Gemini生成 & Discord投稿用の汎用関数
 # =========================================================
+def safe_split_text(text, max_length=1800):
+    """改行単位で文字制限内に安全に分割するヘルパー関数"""
+    lines = text.split("\n")
+    chunks = []
+    current_chunk = ""
+
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > max_length:
+            chunks.append(current_chunk.rstrip())
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+
+    if current_chunk.strip():
+        chunks.append(current_chunk.rstrip())
+
+    return chunks
+
+
 def generate_and_post(prompt_text, target_ch_id, part_title, append_footer=True):
     # Gemini 3 シリーズ推奨（最新のモデル名を優先的に試行）
     models_to_try = [
@@ -541,7 +567,6 @@ def generate_and_post(prompt_text, target_ch_id, part_title, append_footer=True)
                 break  # 成功したら試行ループを抜ける
             except Exception as e:
                 print(f"    └ 試行 {attempt}/3 失敗 ({model_name}): {e}", flush=True)
-                # 429（制限超過）や500系一時エラーの場合は少し待ってリトライ
                 time.sleep(5)
                 
         if summary_text:
@@ -551,11 +576,7 @@ def generate_and_post(prompt_text, target_ch_id, part_title, append_footer=True)
         summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
 
     if summary_text:
-        max_length = 1900
-        chunks = [
-            summary_text[i : i + max_length]
-            for i in range(0, len(summary_text), max_length)
-        ]
+        chunks = safe_split_text(summary_text, max_length=1800)
         for idx, chunk in enumerate(chunks):
             requests.post(
                 f"https://discord.com/api/v10/channels/{target_ch_id}/messages",
@@ -564,7 +585,6 @@ def generate_and_post(prompt_text, target_ch_id, part_title, append_footer=True)
             )
             time.sleep(1)
 
-    # ★ 1便目の生成文面を呼び出し元へ返却する
     return summary_text or ""
 
 
@@ -574,8 +594,7 @@ def generate_and_post(prompt_text, target_ch_id, part_title, append_footer=True)
 def process_reminders(info_summary_text, logs_body):
     """
     1便目の要約結果（info_summary_text）に含まれているイベント・コンテンツのみを対象にして
-    リマインド判定を行います。過去24時間の会話ログ（logs_body）を参照し、
-    先生たちの実際の会話内容（攻略法や感想など）をアロナとプラナの会話に反映します。
+    リマインド判定を行います。
     """
     if not info_summary_text:
         print("  └ [リマインド確認] 1便目の要約テキストが取得できなかったためスキップします。", flush=True)
@@ -588,7 +607,6 @@ def process_reminders(info_summary_text, logs_body):
 
     print("  └ [リマインド判定ログ]", flush=True)
 
-    # 1便目の「💙 ブルーアーカイブ 最新ゲーム情報」に実際に登場したイベントだけをチェック
     for item in parsed_events_list:
         raw = item["raw_text"]
         start_dt = item["start_dt"]
@@ -597,54 +615,44 @@ def process_reminders(info_summary_text, logs_body):
         if not end_dt:
             continue
 
-        # 1便目のGemini生成結果に含まれていないイベントは無視する
+        # ---------------------------------------------------------
+        # ★ イベント名判定の柔軟化（AI要約による表記ゆれ対応）
+        # ---------------------------------------------------------
+        # 日付や「開催中」などの付加文字列を削除して純粋なイベント名称を取り出す
         event_name_clean = re.sub(r"\d{1,2}/\d{1,2}.*$", "", raw).strip()
-        
-        if len(event_name_clean) > 3 and event_name_clean not in info_summary_text:
+        event_keywords = [re.sub(r"[【】「」・\s]", "", k) for k in re.split(r"[\s・]", event_name_clean) if len(k) >= 2]
+
+        # 1便目の要約テキスト内にキーワードが1つでもヒットするかチェック
+        is_in_summary = any(kw in info_summary_text for kw in event_keywords)
+
+        if not is_in_summary:
+            print(f"    ・[{event_name_clean[:15]}] スキップ: 1便目の要約テキスト内に該当文字列が見つかりません。", flush=True)
             continue
 
         remind_type = None  # '折り返し' または '最終日前日'
         
-        # ---------------------------------------------------------
-        # ★ 残り日程（折り返し＆最終日前日）のリマインド判定計算
-        # ---------------------------------------------------------
-        # 【前提条件】
-        # このBOTは毎日 朝05:00 JST に起動します。
-        # 終了当日（例: 03:59終了）の朝5時時点ではすでにイベントが終了しているため、
-        # リマインドは「折り返し日」と「終了日の前日」の朝5時にそれぞれ1回ずつ行います。
-
-        # 時刻（11:00や03:59など）によるズレを防ぐため、日付（date）のみで判定
+        # 日付（date）のみで判定
         end_date = end_dt.date()
-
-        # 1. 最終日前日リマインドの実行日（終了日の 1 日前の朝）
         last_day_remind_date = end_date - timedelta(days=1)
 
         mid_date = None
         if start_dt:
             start_date = start_dt.date()
-            total_days = (end_date - start_date).days  # 開催期間（日数）
+            total_days = (end_date - start_date).days
 
-            # 5日以上開催されるコンテンツの場合：
-            # 全開催日数のちょうど中間（半分）の日数が経過した朝を「折り返しリマインド実行日」とする
-            # （例: 7日開催なら3日経過後の4日目朝、14日開催なら7日経過後の8日目朝）
             if total_days >= 5:
                 half_days = total_days // 2
                 mid_date = start_date + timedelta(days=half_days)
 
-        # ---------------------------------------------------------
-        # 判定処理（完全一致のため、1つのイベントで同日に重複発動することはありません）
-        # ---------------------------------------------------------
         if last_day_remind_date == today_date:
             remind_type = "最終日前日"
         elif mid_date and mid_date == today_date:
             remind_type = "折り返し"
 
-        # デバッグ・ログ確認用
         mid_str = f"折り返し: {mid_date}" if mid_date else "折り返し: なし"
         last_str = f"最終日前日: {last_day_remind_date}"
         print(f"    ・[{event_name_clean[:15]}] 終了日: {end_date} | 予定 ({mid_str} / {last_str}) -> 判定: {remind_type or '対象外(本日実行なし)'}", flush=True)
 
-        # リマインド対象となる場合はリストに追加
         if remind_type:
             remind_targets.append(
                 {
@@ -655,9 +663,8 @@ def process_reminders(info_summary_text, logs_body):
                 }
             )
 
-    # リマインド対象がなければ沈黙
     if not remind_targets:
-        print("  └ [リマインド確認] 本日の要約に含まれる対象イベントでリマインド該当のものがないため沈黙します。", flush=True)
+        print("  └ [リマインド確認] 本日の要約に含まれる対象イベントでリマインド該当のものがないため終了します。", flush=True)
         return
 
     # リマインド文面の生成・投稿処理
@@ -665,7 +672,6 @@ def process_reminders(info_summary_text, logs_body):
         raw = target["raw"]
         remind_type = target["remind_type"]
 
-        # バトル系コンテンツかどうかの判定
         is_battle = any(
             k in raw
             for k in [
