@@ -324,7 +324,13 @@ poll_res = requests.get(
 )
 
 if poll_res.status_code == 200:
-    for msg in poll_res.json():
+    messages = poll_res.json()
+    
+    # 投票メッセージとその作成者IDを記録しておく辞書
+    poll_authors = {}
+
+    # まずアクティブな投票の抽出
+    for msg in messages:
         msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
 
         if "poll" in msg:
@@ -333,6 +339,9 @@ if poll_res.status_code == 200:
 
             if not is_finalized or msg_time >= yesterday:
                 msg_id = msg["id"]
+                author_id = msg.get("author", {}).get("id")
+                poll_authors[msg_id] = author_id  # 作成者を記録
+
                 msg_link = (
                     f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}"
                     if guild_id
@@ -349,11 +358,32 @@ if poll_res.status_code == 200:
                     f"・{status_label}「{question}」\n    👉 投票はこちら: {msg_link}"
                 )
 
-        elif msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
+    # 次に他メンバーからの反応（コメント）を抽出
+    for msg in messages:
+        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+        
+        # 過去24時間以内のBot以外の通常発言
+        if msg_time >= yesterday and not msg.get("author", {}).get("bot", False) and "poll" not in msg:
             author = msg.get("author", {}).get("username", "Unknown")
+            author_id = msg.get("author", {}).get("id")
             content = msg.get("content", "")
+            
+            # 返信（リプライ）情報があるか確認
+            ref_msg = msg.get("referenced_message")
+            ref_msg_id = ref_msg.get("id") if ref_msg else None
+
+            # 「投票への返信」または「投票チャンネルでの他人のコメント」を拾う
+            # ※ 投票の作成者自身の連投・補足コメントは除外
             if content:
-                poll_comments.append(f"{author}: {content}")
+                # リプライ先が投票メッセージの場合、その作成者でなければ採用
+                if ref_msg_id in poll_authors:
+                    if author_id != poll_authors[ref_msg_id]:
+                        poll_comments.append(f"{author}: {content}")
+                else:
+                    # リプライ関係なくチャンネル内に書かれた他人のコメントを拾う場合
+                    # （投票作成者以外の発言のみ採用）
+                    if author_id not in poll_authors.values():
+                        poll_comments.append(f"{author}: {content}")
 
 poll_text = (
     "\n".join(poll_summary)
@@ -361,7 +391,7 @@ poll_text = (
     else "現在アクティブな投票はありません。"
 )
 poll_comments_text = (
-    "\n".join(reversed(poll_comments)) if poll_comments else "なし"
+    "\n".join(reversed(poll_comments)) if poll_comments else "特になし（投票のみ進行中）"
 )
 
 print(
@@ -535,7 +565,7 @@ prompt_info = f"""
 📊 **投票置き場のお知らせ**
 （情報がある場合のみ記載）
 - 現在進行中の投票テーマとURL・メッセージリンク
-- 💬 **メンバーの反応**: （反応があれば短く記載、無ければ「新着の投票はありません。」）
+- 💬 **メンバーの反応**: （メンバーからのコメントや議論の様子があれば要約して紹介、特にコメントがなければ「皆さん静かに投票中のようです！」など自然なひとことを記載）
 
 💙 **ブルーアーカイブ 最新ゲーム情報**
 （情報がある場合のみ、以下のカテゴリ形式で箇条書き）
