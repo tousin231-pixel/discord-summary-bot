@@ -205,7 +205,7 @@ def get_bluearchive_game_events():
         return "現在特別なゲーム内お知らせはありません。", []
 
 
-# 0-2. Wikiからの生徒誕生日情報スクレイピング
+# 0-2. Wikiからの生徒誕生日情報スクレイピング（metaタグ & DOM要素からの両系対応版）
 def get_today_bluearchive_birthdays():
     url = "https://bluearchive.wikiru.jp/?MenuBar/%E8%AA%95%E7%94%9F%E6%97%A5%E4%B8%80%E8%A6%A7"
     req_headers = {
@@ -216,8 +216,7 @@ def get_today_bluearchive_birthdays():
     }
 
     now_jst = datetime.now(timezone(timedelta(hours=9)))
-    month_day_str1 = now_jst.strftime("%m/%d")
-    month_day_str2 = f"{now_jst.month}/{now_jst.day}"
+    target_bday_str = f"{now_jst.month}/{now_jst.day}"  # 例: "10/3" や "1/1"
 
     try:
         response = requests.get(url, headers=req_headers, timeout=10)
@@ -229,13 +228,30 @@ def get_today_bluearchive_birthdays():
         soup = BeautifulSoup(response.text, "html.parser")
         birthday_students = []
 
-        text_lines = soup.get_text().splitlines()
-        for line in text_lines:
-            line_str = line.strip()
-            if month_day_str1 in line_str or month_day_str2 in line_str:
-                clean_name = re.sub(r"^.*?\d{1,2}/\d{1,2}\s*[:：\s-]*", "", line_str)
-                if clean_name and clean_name not in birthday_students:
+        # 方法1: meta description から一括パース（もっとも安定して高速）
+        meta_desc = soup.find("meta", {"name": "description"})
+        if meta_desc and meta_desc.get("content"):
+            content_text = meta_desc["content"]
+            # 「生徒名M/D」パターン（例: ニヤ1/1, ミヤコ1/7）を抽出
+            matches = re.findall(
+                r"([\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFa-zA-Z0-9・（）\(\)]+?)(\d{1,2}/\d{1,2})",
+                content_text,
+            )
+            for name, bday in matches:
+                clean_name = name.strip()
+                if bday == target_bday_str and clean_name and clean_name not in birthday_students:
                     birthday_students.append(clean_name)
+
+        # 方法2: 万が一 meta タグから取得できなかった場合のフォールバック（テーブル/リスト要素探索）
+        if not birthday_students:
+            body_div = soup.find("div", id="body") or soup
+            for tag in body_div.find_all(["tr", "td", "li"]):
+                line_str = tag.get_text(strip=True)
+                if target_bday_str in line_str:
+                    clean_name = re.sub(r"^.*?\d{1,2}/\d{1,2}\s*[:：\s-]*", "", line_str)
+                    clean_name = re.sub(r"\d{1,2}/\d{1,2}.*$", "", clean_name).strip()
+                    if clean_name and clean_name not in birthday_students and len(clean_name) <= 15:
+                        birthday_students.append(clean_name)
 
         if birthday_students:
             return "、".join(birthday_students)
