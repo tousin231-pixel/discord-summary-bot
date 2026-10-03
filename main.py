@@ -333,31 +333,35 @@ for cat_name, channels in CHANNELS.items():
         )
         if res.status_code == 200:
             messages = res.json()
-            # メッセージ収集部分の修正
-ch_msgs = []
-for msg in reversed(messages):
-    msg_time = datetime.fromisoformat(
-        msg["timestamp"].replace("Z", "+00:00")
-    )
-    if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
-        author = msg.get("author", {}).get("username", "Unknown")
-        content = msg.get("content", "")
-        
-        if content:
-            msg_jst = msg_time.astimezone(timezone(timedelta(hours=9)))
-            time_str = msg_jst.strftime("%H:%M")
+            ch_msgs = []
+            for msg in reversed(messages):
+                msg_time = datetime.fromisoformat(
+                    msg["timestamp"].replace("Z", "+00:00")
+                )
+                if msg_time >= yesterday and not msg.get("author", {}).get("bot", False):
+                    author = msg.get("author", {}).get("username", "Unknown")
+                    content = msg.get("content", "")
+                    
+                    if content:
+                        msg_jst = msg_time.astimezone(timezone(timedelta(hours=9)))
+                        time_str = msg_jst.strftime("%H:%M")
+                        
+                        # ★ 返信機能（referenced_message）のチェック
+                        ref_info = ""
+                        ref_msg = msg.get("referenced_message")
+                        if ref_msg:
+                            ref_author = ref_msg.get("author", {}).get("username", "Unknown")
+                            ref_content = ref_msg.get("content", "")
+                            # 参照先の文頭を短く引用 (20文字程度)
+                            ref_snippet = (ref_content[:20] + "...") if len(ref_content) > 20 else ref_content
+                            ref_info = f" (↩️ {ref_author}の「{ref_snippet}」への返信)"
+                        
+                        ch_msgs.append(f"[{time_str}] {author}{ref_info}: {content}")
             
-            # ★ 返信機能（referenced_message）のチェック
-            ref_info = ""
-            ref_msg = msg.get("referenced_message")
-            if ref_msg:
-                ref_author = ref_msg.get("author", {}).get("username", "Unknown")
-                ref_content = ref_msg.get("content", "")
-                # 参照先の文頭を短く引用 (20文字程度)
-                ref_snippet = (ref_content[:20] + "...") if len(ref_content) > 20 else ref_content
-                ref_info = f" (↩️ {ref_author}の「{ref_snippet}」への返信)"
-            
-            ch_msgs.append(f"[{time_str}] {author}{ref_info}: {content}")
+            # メッセージが存在する場合のみ辞書に追加
+            if ch_msgs:
+                collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
+
 
 collected_data["フォーラム"] = {}
 forum_threads_map = {} # スレッド情報マップ (名前 -> ID)
