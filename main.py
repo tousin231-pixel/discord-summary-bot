@@ -206,7 +206,7 @@ def get_bluearchive_game_events():
         return "現在特別なゲーム内お知らせはありません。", []
 
 
-# 0-2. Wikiからの生徒誕生日情報スクレイピング（metaタグ & DOM要素からの両系対応版）
+# 0-2. Wikiからの生徒誕生日情報スクレイピング（判定精度の向上版）
 def get_today_bluearchive_birthdays():
     url = "https://bluearchive.wikiru.jp/?MenuBar/%E8%AA%95%E7%94%9F%E6%97%A5%E4%B8%80%E8%A6%A7"
     req_headers = {
@@ -217,7 +217,7 @@ def get_today_bluearchive_birthdays():
     }
 
     now_jst = datetime.now(timezone(timedelta(hours=9)))
-    target_bday_str = f"{now_jst.month}/{now_jst.day}"  # 例: "10/3" や "1/1"
+    target_bday_str = f"{now_jst.month}/{now_jst.day}"  # 例: "10/3"
 
     try:
         response = requests.get(url, headers=req_headers, timeout=10)
@@ -229,13 +229,15 @@ def get_today_bluearchive_birthdays():
         soup = BeautifulSoup(response.text, "html.parser")
         birthday_students = []
 
-        # 方法1: meta description から一括パース（もっとも安定して高速）
+        # 方法1: meta description から正確にパース
         meta_desc = soup.find("meta", {"name": "description"})
         if meta_desc and meta_desc.get("content"):
             content_text = meta_desc["content"]
-            # 「生徒名M/D」パターン（例: ニヤ1/1, ミヤコ1/7）を抽出
+            
+            # 日付の直後に数字が続かないパターン（例: "10/3" にマッチし "10/31" の後半の1を除外する）
+            # 月/日の境界をしっかり判定します
             matches = re.findall(
-                r"([\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFa-zA-Z0-9・（）\(\)]+?)(\d{1,2}/\d{1,2})",
+                r"([\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFa-zA-Z0-9・（）\(\)]+?)(\d{1,2}/\d{1,2})(?!\d)",
                 content_text,
             )
             for name, bday in matches:
@@ -243,12 +245,14 @@ def get_today_bluearchive_birthdays():
                 if bday == target_bday_str and clean_name and clean_name not in birthday_students:
                     birthday_students.append(clean_name)
 
-        # 方法2: 万が一 meta タグから取得できなかった場合のフォールバック（テーブル/リスト要素探索）
+        # 方法2: DOM要素（テーブル/リスト）からのフォールバック抽出
         if not birthday_students:
             body_div = soup.find("div", id="body") or soup
             for tag in body_div.find_all(["tr", "td", "li"]):
                 line_str = tag.get_text(strip=True)
-                if target_bday_str in line_str:
+                # 「10/3」の後ろにさらに数字が続いていないか確認（10/31等の誤検知防止）
+                pattern = rf"\b{re.escape(target_bday_str)}(?!\d)"
+                if re.search(pattern, line_str):
                     clean_name = re.sub(r"^.*?\d{1,2}/\d{1,2}\s*[:：\s-]*", "", line_str)
                     clean_name = re.sub(r"\d{1,2}/\d{1,2}.*$", "", clean_name).strip()
                     if clean_name and clean_name not in birthday_students and len(clean_name) <= 15:
