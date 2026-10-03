@@ -63,7 +63,7 @@ print(
 )
 
 
-# 0-1. Wikiからのゲーム内イベント情報スクレイピング（構造化データ保持に対応）
+# 0-1. Wikiからのゲーム内イベント情報スクレイピング（範囲指定対応版）
 def get_bluearchive_game_events():
     url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
     req_headers = {
@@ -85,35 +85,47 @@ def get_bluearchive_game_events():
         now_jst = datetime.now(timezone(timedelta(hours=9)))
         today_dt = now_jst
 
-        # 「開催中のイベント」の見出しを探す
-        heading = soup.find(lambda tag: tag.name in ["h2", "h3", "h4"] and "開催中" in tag.text)
-        
+        # <div id="body"> ブロックを取得
+        body_div = soup.find("div", id="body") or soup
+
         extracted_lines = []
-        
-        if heading:
-            # 見出しが含まれる親ブロックから次の兄弟要素を辿る
-            curr = heading.find_parent() or heading
+
+        # 「開催中のイベント」が含まれる要素（strongタグやspanタグなど）を探す
+        start_node = body_div.find(lambda tag: "開催中のイベント" in tag.get_text())
+
+        if start_node:
+            # 見出しタグ（h2/h3/h4/p等）または親要素まで遡って起点とする
+            curr = start_node.find_parent(["p", "h2", "h3", "h4", "div"]) or start_node
+            
             while curr:
                 curr = curr.find_next_sibling()
                 if not curr:
                     break
-                # 次の見出し（開催予定・過去など）に来たら終了
-                if curr.name in ["h2", "h3", "h4"] and any(k in curr.text for k in ["予定", "過去", "終了"]):
+                
+                text_content = curr.get_text()
+
+                # 「報酬受け取り期間」に到達したら終了
+                if "報酬受け取り期間" in text_content:
                     break
                 
-                # テーブル（tr）または リスト（li）から情報を抽出
-                rows = curr.find_all(["tr", "li"])
-                if not rows and curr.name in ["tr", "li"]:
-                    rows = [curr]
-                
-                for row in rows:
-                    text = row.get_text(separator=" ", strip=True)
-                    if text and ("～" in text or "~" in text or "開催" in text):
-                        extracted_lines.append(text)
+                # 次の大きな見出し（開催予定・過去のイベント等）に来てしまった場合も終了
+                if curr.name in ["h2", "h3", "h4"] and any(k in text_content for k in ["予定", "過去", "終了"]):
+                    break
 
-        # フォールバック：見出しで特定できなかった場合、全体から「～」を含む行を検索
+                # 要素内の li や tr からテキストを取り出す
+                items = curr.find_all(["li", "tr"])
+                if not items and curr.name in ["li", "tr", "p"]:
+                    items = [curr]
+
+                for item in items:
+                    t = item.get_text(separator=" ", strip=True)
+                    # 日時区切り「～」や「~」を含む行をイベント情報として抽出
+                    if t and ("～" in t or "~" in t):
+                        extracted_lines.append(t)
+
+        # フォールバック：万が一上記で取得できなかった場合は全体から抽出
         if not extracted_lines:
-            for tag in soup.find_all(["tr", "li"]):
+            for tag in body_div.find_all(["tr", "li"]):
                 t = tag.get_text(separator=" ", strip=True)
                 if t and ("～" in t or "~" in t):
                     extracted_lines.append(t)
@@ -124,8 +136,7 @@ def get_bluearchive_game_events():
         parsed_events = []
         seen = set()
 
-        # 日時判定用の正規表現（曜日や記号を柔軟に許容）
-        # 例: 2026/04/01(水) 11:00 ～ 04/15(水) 10:59
+        # 日時判定用の正規表現（例: 2026/09/23 メンテ後 ～ 10/07 10:59）
         date_pattern = re.compile(
             r"(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\([^)]+\))?\s*(?:(\d{1,2}):(\d{2}))?\s*[～~]\s*(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\([^)]+\))?\s*(?:(\d{1,2}):(\d{2}))?"
         )
@@ -152,7 +163,6 @@ def get_bluearchive_game_events():
                 e_hour = int(match.group(9)) if match.group(9) else 23
                 e_min = int(match.group(10)) if match.group(10) else 59
 
-                # 年跨ぎ（例: 12月〜1月）の補正
                 if s_month and e_month and s_month > e_month and not match.group(6):
                     e_year = s_year + 1
 
@@ -160,7 +170,7 @@ def get_bluearchive_game_events():
                     if e_month and e_day:
                         end_dt = datetime(e_year, e_month, e_day, e_hour, e_min, tzinfo=timezone(timedelta(hours=9)))
                         
-                        # 終了済みの古いイベントは表示対象から外す
+                        # 終了済みの古いイベントは除外
                         if end_dt < today_dt:
                             continue
 
@@ -193,6 +203,7 @@ def get_bluearchive_game_events():
     except Exception as e:
         print(f"⚠️ Wiki取得エラー: {e}", flush=True)
         return "現在特別なゲーム内お知らせはありません。", []
+
 
 # 0-2. Wikiからの生徒誕生日情報スクレイピング
 def get_today_bluearchive_birthdays():
