@@ -592,28 +592,37 @@ def process_reminders(info_summary_text, logs_body):
 
         remind_type = None  # '折り返し' または '最終日前日'
         
-        # 予定日の計算
-        # 日付（date）のみで比較（朝5:00実行前提）
-        end_date = end_dt.date()  # 10/07
-        
-        # 1. 最終日前日（終了日の1日前 ＝ 10/06）
-        last_day_remind_date = end_date - timedelta(days=1)
-        
-        mid_date = None
-        if start_dt:
-            start_date = start_dt.date()  # 9/30
-            total_days = (end_date - start_date).days  # 7日間
-            
-            # 5日以上開催のイベントは「開始日 + 3日（＝10/03）」を折り返し実行日に設定
-            # ※10/04にしたい場合は days=4 に変更してください
-            if total_days >= 5:
-                mid_date = start_date + timedelta(days=3)
+# =========================================================
+# ★ 残り日程（折り返し＆最終日前日）のリマインド判定処理
+# =========================================================
+# 【起動条件前提】
+# このBOTは毎日 朝05:00 JST に起動します。
+# 終了当日（例: 03:59終了）の朝5時時点ではすでにイベントが終了しているため、
+# リマインドは「折り返し日」と「終了日の前日」の朝5時にそれぞれ1回ずつ行います。
 
-        # 判定（日付完全一致なので該当日にそれぞれ1回だけ発動）
-        if last_day_remind_date == today_date:
-            remind_type = "最終日前日"
-        elif mid_date and mid_date == today_date:
-            remind_type = "折り返し"
+# 時刻（11:00や03:59など）によるズレを防ぐため、日付（date）のみで判定
+end_date = end_dt.date()
+
+# 1. 最終日前日リマインドの実行日（終了日の 1 日前の朝）
+last_day_remind_date = end_date - timedelta(days=1)
+
+mid_date = None
+if start_dt:
+    start_date = start_dt.date()
+    total_days = (end_date - start_date).days  # 開催期間（日数）
+
+    # 5日以上開催されるコンテンツの場合：
+    # 開始日から3日経過した朝（＝実質4日目の朝）を「折り返しリマインド実行日」とする
+    if total_days >= 5:
+        mid_date = start_date + timedelta(days=3)
+
+# ---------------------------------------------------------
+# 判定処理（完全一致のため、1つのイベントで同日に重複発動することはありません）
+# ---------------------------------------------------------
+if last_day_remind_date == today_date:
+    remind_type = "最終日前日"
+elif mid_date and mid_date == today_date:
+    remind_type = "折り返し"
 
         # デバッグ・確認用ログ出力
         mid_str = f"折り返し: {mid_date}" if mid_date else "折り返し: なし"
