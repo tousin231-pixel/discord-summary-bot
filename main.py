@@ -573,6 +573,8 @@ def process_reminders(info_summary_text, logs_body):
 
     remind_targets = []
 
+    print("  └ [リマインド判定ログ]", flush=True)
+
     # 1便目の「💙 ブルーアーカイブ 最新ゲーム情報」に実際に登場したイベントだけをチェック
     for item in parsed_events_list:
         raw = item["raw_text"]
@@ -589,18 +591,44 @@ def process_reminders(info_summary_text, logs_body):
             continue
 
         remind_type = None  # '折り返し' または '最終日前日'
-
-        # 1. 最終日前日判定 (終了日の1日前)
-        if (end_dt.date() - timedelta(days=1)) == today_date:
-            remind_type = "最終日前日"
-        # 2. 折り返し地点判定 (開始・終了がある場合)
-        elif start_dt:
+        
+        # 予定日の計算
+        last_day_remind_date = (end_dt.date() - timedelta(days=1))
+        mid_date = None
+        
+        if start_dt:
             total_duration = end_dt - start_dt
             half_days = total_duration.days // 2
-            mid_date = (start_dt + timedelta(days=half_days)).date()
-            if mid_date == today_date and total_duration.days >= 4:
-                remind_type = "折り返し"
+            if total_duration.days >= 4:
+                mid_date = (start_dt + timedelta(days=half_days)).date()
 
+        # 1. 最終日前日判定 (終了日の1日前)
+        if last_day_remind_date == today_date:
+            remind_type = "最終日前日"
+        # 2. 折り返し地点判定 (開始・終了がある場合)
+        elif mid_date and mid_date == today_date:
+            remind_type = "折り返し"
+
+        # デバッグ・確認用ログ出力
+        mid_str = f"折り返し: {mid_date}" if mid_date else "折り返し: なし"
+        last_str = f"最終日前日: {last_day_remind_date}"
+        print(f"    ・[{event_name_clean[:15]}] 終了日: {end_dt.date()} | 予定 ({mid_str} / {last_str}) -> 判定: {remind_type or '対象外(本日実行なし)'}", flush=True)
+
+        if remind_type:
+            remind_targets.append(
+                {
+                    "raw": raw,
+                    "start_dt": start_dt,
+                    "end_dt": end_dt,
+                    "remind_type": remind_type,
+                }
+            )
+
+    if not remind_targets:
+        print("  └ [リマインド確認] 本日実行対象のリマインドはありませんでした。", flush=True)
+        return
+
+    # （以下、リマインド投稿処理は既存通り）
         if remind_type:
             remind_targets.append(
                 {
