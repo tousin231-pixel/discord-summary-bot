@@ -48,16 +48,17 @@ def get_target_forum_threads():
         t_name = tag.get("name", "")
         tag_id_to_name[t_id] = t_name
 
+        # 両方の条件を独立して判定
         if "ストーリー" in t_name:
             story_tag_ids.add(t_id)
-        elif "ブルアカ" in t_name:
+        if "ブルアカ" in t_name:
             ba_tag_ids.add(t_id)
 
-    target_tag_ids = story_tag_ids | ba_tag_ids
-    print(f"  └ 対象タグ: {tag_id_to_name}", flush=True)
+    print(f"  └ 全タグ一覧: {tag_id_to_name}", flush=True)
 
-    if not target_tag_ids:
-        print("⚠️ 対象となるタグが見つかりませんでした。", flush=True)
+    # 「ブルアカ」タグがフォーラム内に存在しない場合はエラー
+    if not ba_tag_ids:
+        print("⚠️ 「ブルアカ」に関するタグが見つかりませんでした。", flush=True)
         return [], set(), {}
 
     guild_id = forum_data.get("guild_id")
@@ -96,7 +97,10 @@ def get_target_forum_threads():
         seen_ids.add(th_id)
 
         applied_tags = set(th.get("applied_tags", []))
-        if applied_tags & target_tag_ids:
+        
+        # 必須条件: 「ブルアカ」タグが付いていること
+        # これにより、「ブルアカ単独」および「ブルアカ＋ストーリー」のみが抽出されます
+        if applied_tags & ba_tag_ids:
             matched_threads.append(th)
 
     print(f"  └ 条件にマッチしたスレッド数: {len(matched_threads)} 件", flush=True)
