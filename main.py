@@ -53,7 +53,8 @@ yesterday = now - timedelta(days=1)
 # まず guild_id (サーバーID) を取得
 guild_id = None
 ch_info_res = requests.get(
-    f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}", headers=headers
+    f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}", headers=headers,
+    timeout=(3.0, 10.0) # 3秒で接続できなければタイムアウト、10秒応答がなければタイムアウト
 )
 if ch_info_res.status_code == 200:
     guild_id = ch_info_res.json().get("guild_id")
@@ -75,7 +76,7 @@ def get_bluearchive_game_events():
     }
 
     try:
-        response = requests.get(url, headers=req_headers, timeout=10)
+        response = requests.get(url, headers=req_headers, timeout=10,timeout=(3.0, 10.0) # 3秒で接続できなければタイムアウト、10秒応答がなければタイムアウト)
         response.encoding = response.apparent_encoding
 
         if response.status_code != 200:
@@ -274,6 +275,7 @@ if guild_id:
     event_res = requests.get(
         f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events",
         headers=headers,
+        timeout=(3.0, 10.0) # 3秒で接続できなければタイムアウト、10秒応答がなければタイムアウト
     )
     if event_res.status_code == 200:
         today_jst = now.astimezone(timezone(timedelta(hours=9))).date()
@@ -311,6 +313,7 @@ poll_comments = []
 poll_res = requests.get(
     f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=50",
     headers=headers,
+    timeout=(3.0, 10.0) # 3秒で接続できなければタイムアウト、10秒応答がなければタイムアウト
 )
 
 if poll_res.status_code == 200:
@@ -396,6 +399,7 @@ for cat_name, channels in CHANNELS.items():
         res = requests.get(
             f"https://discord.com/api/v10/channels/{ch_id}/messages?limit=100",
             headers=headers,
+            timeout=(3.0, 10.0) # 3秒で接続できなければタイムアウト、10秒応答がなければタイムアウト
         )
         if res.status_code == 200:
             messages = res.json()
@@ -435,6 +439,7 @@ if guild_id:
     guild_threads_res = requests.get(
         f"https://discord.com/api/v10/guilds/{guild_id}/threads/active",
         headers=headers,
+        timeout=(3.0, 10.0) # 3秒で接続できなければタイムアウト、10秒応答がなければタイムアウト
     )
     if guild_threads_res.status_code == 200:
         threads_data = guild_threads_res.json()
@@ -470,6 +475,7 @@ if guild_id:
             msg_res = requests.get(
                 f"https://discord.com/api/v10/channels/{th_id}/messages?limit=50",
                 headers=headers,
+                timeout=(3.0, 10.0) # 3秒で接続できなければタイムアウト、10秒応答がなければタイムアウト
             )
             if msg_res.status_code == 200:
                 th_msgs = []
@@ -694,6 +700,7 @@ def generate_and_post(prompt_text, target_ch_id, part_title, append_footer=True)
             requests.post(
                 f"https://discord.com/api/v10/channels/{target_ch_id}/messages",
                 headers=headers,
+                timeout=(3.0, 10.0), # 3秒で接続できなければタイムアウト、10秒応答がなければタイムアウト
                 json={"content": chunk},
             )
             time.sleep(1)
