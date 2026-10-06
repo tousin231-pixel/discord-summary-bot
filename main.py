@@ -19,8 +19,8 @@ DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # タイムアウト設定 (接続, 読み込み)
-HTTP_TIMEOUT = (3.0, 10.0)
-GEMINI_TIMEOUT_SEC = 45
+HTTP_TIMEOUT = (6.0, 20.0)
+GEMINI_TIMEOUT_SEC = 90
 
 # 共通ヘッダー
 DISCORD_HEADERS = {
@@ -313,7 +313,17 @@ def fetch_guild_events(guild_id: str, now_utc: datetime):
 
         if (status == 2) or (status == 1 and event_date_jst == today_jst):
             name = ev.get("name")
-            event_summary.append(f"・{name} (開始: {time_str} JST)")
+            event_id = ev.get("id")
+            channel_id = ev.get("channel_id") # VC等の開催チャンネルIDがある場合
+
+            # イベント直接URLを生成
+            event_url = f"https://discord.com/events/{guild_id}/{event_id}"
+            
+            # チャンネルIDがある場合はチャンネルメンションも追加可能
+            ch_mention = f" (<#{channel_id}>)" if channel_id else ""
+
+            # 👈 や 🔗 などの絵文字を添えて導線を強調
+            event_summary.append(f"・{name} (開始: {time_str} JST){ch_mention}\n    👉 イベント詳細・参加はこちら: {event_url}")
 
     return "\n".join(event_summary) if event_summary else "本日開催予定のサーバーイベントはありません。"
 
@@ -753,7 +763,7 @@ def main():
 （情報がある場合のみ記載）
 
 📅 **本日のサーバーイベント**
-（情報がある場合のみ、JST時間付きで記載）
+（（情報がある場合のみ、JST時間およびイベントURL・リンクを添えて記載））
 
 📊 **投票置き場のお知らせ**
 （情報がある場合のみ記載）
