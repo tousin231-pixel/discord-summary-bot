@@ -2,8 +2,8 @@ name: Post Story Topic
 
 on:
   schedule:
-  # 毎日 日本時間 午前5:20（UTC 20:38）に自動実行
-    - cron: '17 21 * * *'
+  # 毎日 日本時間 午前6:00（UTC 前日21:00）に自動実行
+    - cron: '0 21 * * *'
   workflow_dispatch: # 手動実行ボタン
 
 jobs:
