@@ -1,30 +1,41 @@
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 import csv
 from datetime import datetime, timedelta, timezone
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+
 from bs4 import BeautifulSoup
 from google import genai
 import requests
 
-print("[1/6] 環境変数とチャンネル構成の読み込み...", flush=True)
+# =========================================================
+# 1. 設定 & 定数管理
+# =========================================================
+
+# 環境変数
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# 投稿先チャンネル（デイリー要約）
-TARGET_CHANNEL_ID = "1552352658445181059"
-# 投票置き場チャンネル
-POLL_CHANNEL_ID = "1526389409841152150"
-# フォーラムチャンネル（親ID）
-FORUM_CHANNEL_ID = "1419978214394167296"
+# タイムアウト設定 (接続, 読み込み)
+HTTP_TIMEOUT = (3.0, 10.0)
+GEMINI_TIMEOUT_SEC = 45
 
-# ★ リマインド投稿用チャンネルID
-TALK_CHANNEL_ID = "1376909055091671071"  # ブルアカ雑談
-BATTLE_CHANNEL_ID = "1379058754716307516"  # 総力戦・バトル系
+# 共通ヘッダー
+DISCORD_HEADERS = {
+    "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+    "Content-Type": "application/json",
+}
 
-# 収集対象のカテゴリ・チャンネル定義（ボイスチャンネルのテキスト含む）
+# Discord チャンネルID定義
+TARGET_CHANNEL_ID = "1552352658445181059"  # デイリー要約
+POLL_CHANNEL_ID = "1526389409841152150"    # 投票置き場
+FORUM_CHANNEL_ID = "1419978214394167296"   # フォーラム親ID
+TALK_CHANNEL_ID = "1376909055091671071"    # ブルアカ雑談 (リマインド用)
+BATTLE_CHANNEL_ID = "1379058754716307516"  # 総力戦・バトル系 (リマインド用)
+
+# 収集対象のカテゴリ・チャンネル定義
 CHANNELS = {
     "シャーレ談話室": {
         "1376909055091671071": "ブルアカ雑談",
@@ -47,817 +58,590 @@ CHANNELS = {
     },
 }
 
-headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
+# 試行するGeminiモデルリスト
+GEMINI_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash",
+]
 
-now = datetime.now(timezone.utc)
-yesterday = now - timedelta(days=1)
-
-# まず guild_id (サーバーID) を取得
-guild_id = None
-ch_info_res = requests.get(
-    f"https://discord.com/api/v10/channels/{TARGET_CHANNEL_ID}",
-    headers=headers,
-    timeout=(3.0, 10.0),
-)
-if ch_info_res.status_code == 200:
-  guild_id = ch_info_res.json().get("guild_id")
-
-print(
-    "[2/6] ブルアカ公式Wikiから最新ゲーム内イベント＆誕生日情報を取得中...",
-    flush=True,
-)
+# タイムゾーン定義
+JST = timezone(timedelta(hours=9))
+UTC = timezone.utc
 
 
-# 0-1. Wikiからのゲーム内イベント情報スクレイピング
-def get_bluearchive_game_events():
-  url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
-  req_headers = {
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-          " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      )
-  }
+# =========================================================
+# 2. 汎用ヘルパー関数
+# =========================================================
 
-  try:
-    response = requests.get(url, headers=req_headers, timeout=(3.0, 10.0))
-    response.encoding = response.apparent_encoding
+def get_now_jst():
+    """現在時刻 (JST) を取得"""
+    return datetime.now(JST)
 
-    if response.status_code != 200:
-      print(
-          f"⚠️ Wikiステータスコード異常: {response.status_code}", flush=True
-      )
-      return "現在特別なゲーム内お知らせはありません。", []
-
-    soup = BeautifulSoup(response.text, "html.parser")
-    now_jst = datetime.now(timezone(timedelta(hours=9)))
-    today_dt = now_jst
-
-    body_div = soup.find("div", id="body") or soup
-    extracted_lines = []
-
-    start_heading = None
-    for h in body_div.find_all(["h2", "h3", "h4", "p", "strong"]):
-      if "開催中のイベント" in h.get_text():
-        start_heading = h
-        break
-
-    if start_heading:
-      curr = start_heading
-      while curr:
-        curr = curr.find_next_sibling()
-        if not curr:
-          break
-
-        text_content = curr.get_text()
-
-        if any(
-            k in text_content
-            for k in [
-                "報酬受け取り期間",
-                "開催予定",
-                "過去のイベント",
-                "終了したイベント",
-            ]
-        ):
-          break
-        if curr.name in ["h2", "h3", "h4"] and any(
-            k in text_content for k in ["予定", "過去", "終了"]
-        ):
-          break
-
-        items = curr.find_all(["li", "tr"])
-        if not items and curr.name in ["li", "tr", "p"]:
-          items = [curr]
-
-        for item in items:
-          t = item.get_text(separator=" ", strip=True)
-          if t and ("～" in t or "~" in t):
-            extracted_lines.append(t)
-
-    if not extracted_lines:
-      for tag in body_div.find_all(["tr", "li"]):
-        t = tag.get_text(separator=" ", strip=True)
-        if t and ("～" in t or "~" in t):
-          if not any(
-              k in t for k in ["過去", "終了", "2021", "2022", "2023"]
-          ):
-            extracted_lines.append(t)
-
-    print(f"  └ [Wiki取得] 抽出行数: {len(extracted_lines)} 件", flush=True)
-
-    events_text_list = []
-    parsed_events = []
-    seen = set()
-
-    date_pattern = re.compile(
-        r"(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\([^)]+\))?\s*(?:(\d{1,2}):(\d{2}))?\s*[～~]\s*(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\([^)]+\))?\s*(?:(\d{1,2}):(\d{2}))?"
-    )
-
-    for line in extracted_lines:
-      if line in seen or len(line) < 5:
-        continue
-      seen.add(line)
-
-      match = date_pattern.search(line)
-      remaining_str = ""
-      start_dt = None
-      end_dt = None
-
-      if match:
-        s_year = int(match.group(1)) if match.group(1) else now_jst.year
-        s_month = int(match.group(2)) if match.group(2) else None
-        s_day = int(match.group(3)) if match.group(3) else None
-
-        e_year = int(match.group(6)) if match.group(6) else now_jst.year
-        e_month = int(match.group(7)) if match.group(7) else None
-        e_day = int(match.group(8)) if match.group(8) else None
-        e_hour = int(match.group(9)) if match.group(9) else 23
-        e_min = int(match.group(10)) if match.group(10) else 59
-
-        if s_month and e_month and s_month > e_month and not match.group(6):
-          e_year = s_year + 1
-
-        try:
-          if e_month and e_day:
-            end_dt = datetime(
-                e_year,
-                e_month,
-                e_day,
-                e_hour,
-                e_min,
-                tzinfo=timezone(timedelta(hours=9)),
-            )
-
-            if end_dt < today_dt:
-              continue
-
-            diff = end_dt - today_dt
-            if diff.total_seconds() <= 0:
-              remaining_str = "【本日終了！】"
-            else:
-              days = diff.days
-              if days >= 1:
-                remaining_str = f"【残り あと {days} 日】"
-              else:
-                hours = int(diff.total_seconds() // 3600)
-                remaining_str = f"【残り あと {hours} 時間】"
-
-          if s_month and s_day:
-            start_dt = datetime(
-                s_year,
-                s_month,
-                s_day,
-                11,
-                0,
-                tzinfo=timezone(timedelta(hours=9)),
-            )
-        except Exception as ex:
-          print(f"    ⚠️ 日付変換エラー ({line}): {ex}", flush=True)
-
-      events_text_list.append(f"・{line} {remaining_str}".strip())
-      parsed_events.append(
-          {"raw_text": line, "start_dt": start_dt, "end_dt": end_dt}
-      )
-
-    summary_str = (
-        "\n".join(events_text_list[:12])
-        if events_text_list
-        else "現在特別なゲーム内お知らせはありません。"
-    )
-    return summary_str, parsed_events
-
-  except Exception as e:
-    print(f"⚠️ Wiki取得エラー: {e}", flush=True)
-    return "現在特別なゲーム内お知らせはありません。", []
-
-
-# 0-2. CSVファイルから生徒の誕生日情報を取得する関数
-def get_today_bluearchive_birthdays(csv_path="birthday.csv"):
-  now_jst = datetime.now(timezone(timedelta(hours=9)))
-  target_bday_str = f"{now_jst.month}/{now_jst.day}"
-  print(
-      f"[2/6] 誕生日データの確認中... (対象日付: '{target_bday_str}')",
-      flush=True,
-  )
-
-  birthday_students = []
-
-  try:
-    with open(csv_path, mode="r", encoding="utf-8") as f:
-      reader = csv.reader(f)
-      for row in reader:
-        if len(row) >= 2:
-          name = row[0].strip()
-          bday = row[1].strip()
-          if bday == target_bday_str:
-            birthday_students.append(name)
-
-    if birthday_students:
-      result_str = "、".join(birthday_students)
-      print(
-          f"  └ [誕生日チェック成功] 該当生徒: {result_str}",
-          flush=True,
-      )
-      return result_str
-    else:
-      print(
-          f"  └ [誕生日チェック] 本日({target_bday_str})が誕生日の生徒はいません。",
-          flush=True,
-      )
-      return None
-
-  except FileNotFoundError:
-    print(
-        f"  ⚠️ [誕生日チェックエラー] {csv_path} が見つかりません。"
-        " ファイル配置を確認してください。",
-        flush=True,
-    )
-    return None
-  except Exception as e:
-    print(
-        f"  ⚠️ [誕生日チェックエラー] 読み込み中にエラーが発生しました:"
-        f" {e}",
-        flush=True,
-    )
-    return None
-
-
-game_event_text, parsed_events_list = get_bluearchive_game_events()
-today_student_birthday = get_today_bluearchive_birthdays()
-
-if today_student_birthday:
-  birthday_info_text = f"本日お誕生日の生徒: {today_student_birthday}ちゃん"
-else:
-  birthday_info_text = "本日お誕生日の生徒はいません。"
-
-print("[3/6] 本日開催のイベント＆投票情報を取得中...", flush=True)
-
-# 1. Discordイベント情報の取得
-event_summary = []
-if guild_id:
-  event_res = requests.get(
-      f"https://discord.com/api/v10/guilds/{guild_id}/scheduled-events",
-      headers=headers,
-      timeout=(3.0, 10.0),
-  )
-  if event_res.status_code == 200:
-    today_jst = now.astimezone(timezone(timedelta(hours=9))).date()
-
-    for ev in event_res.json():
-      status = ev.get("status")
-      start_iso = ev.get("scheduled_start_time")
-
-      if start_iso:
-        utc_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-        jst_dt = utc_dt.astimezone(timezone(timedelta(hours=9)))
-        time_str = jst_dt.strftime("%H:%M")
-        event_date_jst = jst_dt.date()
-      else:
-        time_str = "時間未定"
-        event_date_jst = None
-
-      is_today_event = (status == 2) or (
-          status == 1 and event_date_jst == today_jst
-      )
-
-      if is_today_event:
-        name = ev.get("name")
-        event_summary.append(f"・{name} (開始: {time_str} JST)")
-
-event_text = (
-    "\n".join(event_summary)
-    if event_summary
-    else "本日開催予定のサーバーイベントはありません。"
-)
-
-# 2. 投票置き場からのデータ取得
-poll_summary = []
-poll_comments = []
-poll_res = requests.get(
-    f"https://discord.com/api/v10/channels/{POLL_CHANNEL_ID}/messages?limit=50",
-    headers=headers,
-    timeout=(3.0, 10.0),
-)
-
-if poll_res.status_code == 200:
-  messages = poll_res.json()
-  poll_authors = {}
-
-  for msg in messages:
-    msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
-
-    if "poll" in msg:
-      poll_data = msg["poll"]
-      is_finalized = poll_data.get("results", {}).get("is_finalized", False)
-
-      if not is_finalized or msg_time >= yesterday:
-        msg_id = msg["id"]
-        author_id = msg.get("author", {}).get("id")
-        poll_authors[msg_id] = author_id
-
-        msg_link = (
-            f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}"
-            if guild_id
-            else ""
-        )
-        question = poll_data.get("question", {}).get(
-            "text", "（無題の投票）"
-        )
-
-        status_label = (
-            "【投票受付中】" if not is_finalized else "【締め切り済み】"
-        )
-        poll_summary.append(
-            f"・{status_label}「{question}」\n    👉 投票はこちら: {msg_link}"
-        )
-
-  for msg in messages:
-    msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
-
-    if (
-        msg_time >= yesterday
-        and not msg.get("author", {}).get("bot", False)
-        and "poll" not in msg
-    ):
-      author = msg.get("author", {}).get("username", "Unknown")
-      author_id = msg.get("author", {}).get("id")
-      content = msg.get("content", "")
-
-      ref_msg = msg.get("referenced_message")
-      ref_msg_id = ref_msg.get("id") if ref_msg else None
-
-      if content:
-        if ref_msg_id in poll_authors:
-          if author_id != poll_authors[ref_msg_id]:
-            poll_comments.append(f"{author}: {content}")
+def fetch_discord_api(endpoint: str, method: str = "GET", payload: dict = None):
+    """Discord API呼び出しの共通化"""
+    url = f"https://discord.com/api/v10/{endpoint.lstrip('/')}"
+    try:
+        if method.upper() == "GET":
+            res = requests.get(url, headers=DISCORD_HEADERS, timeout=HTTP_TIMEOUT)
+        elif method.upper() == "POST":
+            res = requests.post(url, headers=DISCORD_HEADERS, json=payload, timeout=HTTP_TIMEOUT)
         else:
-          if author_id not in poll_authors.values():
-            poll_comments.append(f"{author}: {content}")
+            raise ValueError(f"Unsupported HTTP method: {method}")
+        
+        if res.status_code in [200, 201]:
+            return res.json()
+        print(f"⚠️ Discord API エラー [{res.status_code}]: {endpoint}", flush=True)
+        return None
+    except Exception as e:
+        print(f"⚠️ Discord API 通信例外 ({endpoint}): {e}", flush=True)
+        return None
 
-poll_text = (
-    "\n".join(poll_summary)
-    if poll_summary
-    else "現在アクティブな投票はありません。"
-)
-poll_comments_text = (
-    "\n".join(reversed(poll_comments))
-    if poll_comments
-    else "特になし（投票のみ進行中）"
-)
+def safe_split_text(text: str, max_length: int = 1800) -> list[str]:
+    """Discordの文字制限(2000文字)を超えないよう安全にテキストを分割"""
+    lines = text.split("\n")
+    chunks = []
+    current_chunk = ""
 
-print(
-    "[4/6] 対象チャンネル＆フォーラムから過去24時間のメッセージを収集...",
-    flush=True,
-)
-collected_data = {}
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > max_length:
+            chunks.append(current_chunk.rstrip())
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
 
-for cat_name, channels in CHANNELS.items():
-  collected_data[cat_name] = {}
-  for ch_id, ch_name in channels.items():
-    res = requests.get(
-        f"https://discord.com/api/v10/channels/{ch_id}/messages?limit=100",
-        headers=headers,
-        timeout=(3.0, 10.0),
-    )
-    if res.status_code == 200:
-      messages = res.json()
-      ch_msgs = []
-      for msg in reversed(messages):
-        msg_time = datetime.fromisoformat(
-            msg["timestamp"].replace("Z", "+00:00")
+    if current_chunk.strip():
+        chunks.append(current_chunk.rstrip())
+
+    return chunks
+
+
+# =========================================================
+# 3. データ収集モジュール (Wiki, CSV, Discord)
+# =========================================================
+
+def get_bluearchive_game_events():
+    """Wikiから最新イベント情報を取得"""
+    url = "https://bluearchive.wikiru.jp/?%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7"
+    req_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        if msg_time >= yesterday and not msg.get("author", {}).get(
-            "bot", False
-        ):
-          author = msg.get("author", {}).get("username", "Unknown")
-          content = msg.get("content", "")
+    }
 
-          if content:
-            msg_jst = msg_time.astimezone(timezone(timedelta(hours=9)))
-            time_str = msg_jst.strftime("%H:%M")
+    try:
+        response = requests.get(url, headers=req_headers, timeout=HTTP_TIMEOUT)
+        response.encoding = response.apparent_encoding
 
-            ref_info = ""
-            ref_msg = msg.get("referenced_message")
-            if ref_msg:
-              ref_author = ref_msg.get("author", {}).get("username", "Unknown")
-              ref_content = ref_msg.get("content", "")
-              ref_snippet = (
-                  (ref_content[:20] + "...")
-                  if len(ref_content) > 20
-                  else ref_content
-              )
-              ref_info = f" (↩️ {ref_author}の「{ref_snippet}」への返信)"
+        if response.status_code != 200:
+            print(f"⚠️ Wikiステータスコード異常: {response.status_code}", flush=True)
+            return "現在特別なゲーム内お知らせはありません。", []
 
-            ch_msgs.append(f"[{time_str}] {author}{ref_info}: {content}")
+        soup = BeautifulSoup(response.text, "html.parser")
+        today_dt = get_now_jst()
+        now_year = today_dt.year
 
-      if ch_msgs:
-        collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
+        body_div = soup.find("div", id="body") or soup
+        extracted_lines = []
 
-collected_data["フォーラム"] = {}
-forum_threads_map = {}
+        start_heading = None
+        for h in body_div.find_all(["h2", "h3", "h4", "p", "strong"]):
+            if "開催中のイベント" in h.get_text():
+                start_heading = h
+                break
 
-if guild_id:
-  guild_threads_res = requests.get(
-      f"https://discord.com/api/v10/guilds/{guild_id}/threads/active",
-      headers=headers,
-      timeout=(3.0, 10.0),
-  )
-  if guild_threads_res.status_code == 200:
-    threads_data = guild_threads_res.json()
-    threads = threads_data.get("threads", [])
+        if start_heading:
+            curr = start_heading
+            while curr:
+                curr = curr.find_next_sibling()
+                if not curr:
+                    break
 
-    target_threads = [
-        th for th in threads if th.get("parent_id") == FORUM_CHANNEL_ID
-    ]
+                text_content = curr.get_text()
+                if any(k in text_content for k in ["報酬受け取り期間", "開催予定", "過去のイベント", "終了したイベント"]):
+                    break
+                if curr.name in ["h2", "h3", "h4"] and any(k in text_content for k in ["予定", "過去", "終了"]):
+                    break
 
-    for th in target_threads:
-      th_id = th["id"]
-      th_name = th.get("name", "スレッド")
-      forum_threads_map[th_name] = th_id
+                items = curr.find_all(["li", "tr"])
+                if not items and curr.name in ["li", "tr", "p"]:
+                    items = [curr]
 
-      is_new_thread = False
-      create_ts_raw = th.get("create_timestamp")
+                for item in items:
+                    t = item.get_text(separator=" ", strip=True)
+                    if t and ("～" in t or "~" in t):
+                        extracted_lines.append(t)
 
-      if create_ts_raw:
-        created_at = datetime.fromisoformat(create_ts_raw.replace("Z", "+00:00"))
-        if created_at >= yesterday:
-          is_new_thread = True
-      else:
-        try:
-          snowflake_time = ((int(th_id) >> 22) + 1420070400000) / 1000.0
-          created_at = datetime.fromtimestamp(snowflake_time, tz=timezone.utc)
-          if created_at >= yesterday:
-            is_new_thread = True
-        except Exception:
-          pass
+        if not extracted_lines:
+            for tag in body_div.find_all(["tr", "li"]):
+                t = tag.get_text(separator=" ", strip=True)
+                if t and ("～" in t or "~" in t):
+                    if not any(k in t for k in ["過去", "終了", "2021", "2022", "2023"]):
+                        extracted_lines.append(t)
 
-      msg_res = requests.get(
-          f"https://discord.com/api/v10/channels/{th_id}/messages?limit=50",
-          headers=headers,
-          timeout=(3.0, 10.0),
-      )
-      if msg_res.status_code == 200:
-        th_msgs = []
-        for msg in reversed(msg_res.json()):
-          msg_time = datetime.fromisoformat(
-              msg["timestamp"].replace("Z", "+00:00")
-          )
-          if msg_time >= yesterday and not msg.get("author", {}).get(
-              "bot", False
-          ):
+        print(f"  └ [Wiki取得] 抽出行数: {len(extracted_lines)} 件", flush=True)
+
+        events_text_list = []
+        parsed_events = []
+        seen = set()
+
+        date_pattern = re.compile(
+            r"(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\([^)]+\))?\s*(?:(\d{1,2}):(\d{2}))?\s*[～~]\s*(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\([^)]+\))?\s*(?:(\d{1,2}):(\d{2}))?"
+        )
+
+        for line in extracted_lines:
+            if line in seen or len(line) < 5:
+                continue
+            seen.add(line)
+
+            match = date_pattern.search(line)
+            remaining_str = ""
+            start_dt = None
+            end_dt = None
+
+            if match:
+                s_year = int(match.group(1)) if match.group(1) else now_year
+                s_month = int(match.group(2)) if match.group(2) else None
+                s_day = int(match.group(3)) if match.group(3) else None
+
+                e_year = int(match.group(6)) if match.group(6) else now_year
+                e_month = int(match.group(7)) if match.group(7) else None
+                e_day = int(match.group(8)) if match.group(8) else None
+                e_hour = int(match.group(9)) if match.group(9) else 23
+                e_min = int(match.group(10)) if match.group(10) else 59
+
+                if s_month and e_month and s_month > e_month and not match.group(6):
+                    e_year = s_year + 1
+
+                try:
+                    if e_month and e_day:
+                        end_dt = datetime(e_year, e_month, e_day, e_hour, e_min, tzinfo=JST)
+                        if end_dt < today_dt:
+                            continue
+
+                        diff = end_dt - today_dt
+                        if diff.total_seconds() <= 0:
+                            remaining_str = "【本日終了！】"
+                        else:
+                            days = diff.days
+                            if days >= 1:
+                                remaining_str = f"【残り あと {days} 日】"
+                            else:
+                                hours = int(diff.total_seconds() // 3600)
+                                remaining_str = f"【残り あと {hours} 時間】"
+
+                    if s_month and s_day:
+                        start_dt = datetime(s_year, s_month, s_day, 11, 0, tzinfo=JST)
+                except Exception as ex:
+                    print(f"    ⚠️ 日付変換エラー ({line}): {ex}", flush=True)
+
+            events_text_list.append(f"・{line} {remaining_str}".strip())
+            parsed_events.append({"raw_text": line, "start_dt": start_dt, "end_dt": end_dt})
+
+        summary_str = (
+            "\n".join(events_text_list[:12])
+            if events_text_list
+            else "現在特別なゲーム内お知らせはありません。"
+        )
+        return summary_str, parsed_events
+
+    except Exception as e:
+        print(f"⚠️ Wiki取得エラー: {e}", flush=True)
+        return "現在特別なゲーム内お知らせはありません。", []
+
+
+def get_today_bluearchive_birthdays(csv_path="birthday.csv"):
+    """CSVから本日誕生日の生徒を取得"""
+    now_jst = get_now_jst()
+    target_bday_str = f"{now_jst.month}/{now_jst.day}"
+    print(f"[2/6] 誕生日データの確認中... (対象日付: '{target_bday_str}')", flush=True)
+
+    birthday_students = []
+    try:
+        with open(csv_path, mode="r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) >= 2:
+                    name, bday = row[0].strip(), row[1].strip()
+                    if bday == target_bday_str:
+                        birthday_students.append(name)
+
+        if birthday_students:
+            result_str = "、".join(birthday_students)
+            print(f"  └ [誕生日チェック成功] 該当生徒: {result_str}", flush=True)
+            return result_str
+        print(f"  └ [誕生日チェック] 本日({target_bday_str})が誕生日の生徒はいません。", flush=True)
+        return None
+
+    except FileNotFoundError:
+        print(f"  ⚠️ [誕生日チェックエラー] {csv_path} が見つかりません。", flush=True)
+        return None
+    except Exception as e:
+        print(f"  ⚠️ [誕生日チェックエラー] 読み込み例外: {e}", flush=True)
+        return None
+
+
+def fetch_guild_events(guild_id: str, now_utc: datetime):
+    """Discordサーバーのスケジュールイベントを取得"""
+    if not guild_id:
+        return "本日開催予定のサーバーイベントはありません。"
+
+    data = fetch_discord_api(f"guilds/{guild_id}/scheduled-events")
+    if not data:
+        return "本日開催予定のサーバーイベントはありません。"
+
+    today_jst = now_utc.astimezone(JST).date()
+    event_summary = []
+
+    for ev in data:
+        status = ev.get("status")
+        start_iso = ev.get("scheduled_start_time")
+
+        if start_iso:
+            utc_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+            jst_dt = utc_dt.astimezone(JST)
+            time_str = jst_dt.strftime("%H:%M")
+            event_date_jst = jst_dt.date()
+        else:
+            time_str = "時間未定"
+            event_date_jst = None
+
+        if (status == 2) or (status == 1 and event_date_jst == today_jst):
+            name = ev.get("name")
+            event_summary.append(f"・{name} (開始: {time_str} JST)")
+
+    return "\n".join(event_summary) if event_summary else "本日開催予定のサーバーイベントはありません。"
+
+
+def fetch_polls(guild_id: str, yesterday_utc: datetime):
+    """投票置き場チャンネルから投票とコメントを取得"""
+    messages = fetch_discord_api(f"channels/{POLL_CHANNEL_ID}/messages?limit=50")
+    if not messages:
+        return "現在アクティブな投票はありません。", "特になし（投票のみ進行中）"
+
+    poll_summary = []
+    poll_comments = []
+    poll_authors = {}
+
+    for msg in messages:
+        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+        if "poll" in msg:
+            poll_data = msg["poll"]
+            is_finalized = poll_data.get("results", {}).get("is_finalized", False)
+
+            if not is_finalized or msg_time >= yesterday_utc:
+                msg_id = msg["id"]
+                author_id = msg.get("author", {}).get("id")
+                poll_authors[msg_id] = author_id
+
+                msg_link = f"https://discord.com/channels/{guild_id}/{POLL_CHANNEL_ID}/{msg_id}" if guild_id else ""
+                question = poll_data.get("question", {}).get("text", "（無題の投票）")
+                status_label = "【投票受付中】" if not is_finalized else "【締め切り済み】"
+                poll_summary.append(f"・{status_label}「{question}」\n    👉 投票はこちら: {msg_link}")
+
+    for msg in messages:
+        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+        if msg_time >= yesterday_utc and not msg.get("author", {}).get("bot", False) and "poll" not in msg:
             author = msg.get("author", {}).get("username", "Unknown")
+            author_id = msg.get("author", {}).get("id")
             content = msg.get("content", "")
+
+            ref_msg = msg.get("referenced_message")
+            ref_msg_id = ref_msg.get("id") if ref_msg else None
+
             if content:
-              th_msgs.append(f"{author}: {content}")
+                if ref_msg_id in poll_authors:
+                    if author_id != poll_authors[ref_msg_id]:
+                        poll_comments.append(f"{author}: {content}")
+                else:
+                    if author_id not in poll_authors.values():
+                        poll_comments.append(f"{author}: {content}")
 
-        if th_msgs:
-          prefix = "🆕 " if is_new_thread else ""
-          collected_data["フォーラム"][f"{prefix}<#{th_id}> ({th_name})"] = (
-              th_msgs
-          )
-
-logs_body = ""
-for cat_name, channels in collected_data.items():
-  if channels:
-    logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
-    for ch_tag, msgs in channels.items():
-      authors = set(
-          m.split("] ")[1].split(":")[0]
-          for m in msgs
-          if "] " in m and ":" in m.split("] ")[1]
-      )
-      logs_body += (
-          f"--- {ch_tag} (投稿数: {len(msgs)}件 / 発言者数:"
-          f" {len(authors)}人) ---\n"
-      )
-      logs_body += "\n".join(msgs) + "\n"
-
-if not logs_body.strip():
-  logs_body = "過去24時間の新規投稿はありませんでした。"
-
-print("[5/6] Gemini APIによる要約作成中...", flush=True)
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-# プロンプト設定
-prompt_info = f"""
-あなたはDiscordサーバー「足跡の化石」の広報Botです。
-以下の【入力データ】を元に、ゲーム・サーバーの連絡事項をまとめた【お知らせ編】を作成してください。
-
-■ 入力データ
-・【ブルアカ生徒の本日誕生日情報】：{birthday_info_text}
-・【本日開催のディスコ―ドイベント】：{event_text}
-・【投票置き場の新着投票（過去24時間）】：{poll_text}
-・【ブルアカ最新ゲーム内イベント情報】：{game_event_text}
-
-■ キャラクター設定とトーン
-・ブルーアーカイブの「アロナ」として、元気で健気な言葉遣いを徹底してください。
-・冒頭は朝の挨拶から始めてください。
-  （例：「先生！おはようございます！アロナです！今朝も準備バッチリですよ！」）
-・メッセージの最後は、次の投稿（Discord内の会話要約）へスムーズにつなぐ「切り替えの挨拶」で終えてください。
-  ※「今日も一日頑張りましょう！」などの最終的な締めくくりの挨拶はここではしないでください。
-
-■ 出力・表示分岐ルール
-1. 【誕生日・サーバーイベント・投票情報の表示判定】
-   ・3つ（誕生日・サーバーイベント・投票）の全てにおいて該当情報が一切ない場合：
-     個別の見出しは作らず、以下の1行のみを出力してください。
-     🎉 **本日の誕生日・サーバーイベント・新着投票はありません！**
-   ・3つのうち1つでも該当情報がある場合：
-     該当する項目の見出しのみを立てて詳細やリンクを記載してください（情報がない項目は省略）。
-
-2. 【ゲーム情報の表示判定】
-   ・「💙 ブルーアーカイブ 最新ゲーム情報」に該当する情報が無い場合は、見出しごと省略してください。
-
-3. 【階層・インデントのルール】
-   ・同カテゴリ内に複数の情報（イベントやキャンペーン等）がある場合は、インデント（スペース2つ＋`- `）を入れてぶら下げてください。
-
-■ 出力フォーマット
-以下の構成で出力してください。
-
-📢 **足跡の化石 デイリーサマリー（お知らせ・ゲーム情報編）**
-
-（アロナからの朝の挨拶）
-
-🎂 **本日の誕生日**
-（情報がある場合のみ記載）
-
-📅 **本日のサーバーイベント**
-（情報がある場合のみ、JST時間付きで記載）
-
-📊 **投票置き場のお知らせ**
-（情報がある場合のみ記載）
-- 現在進行中の投票テーマとURL・メッセージリンク
-- 💬 **メンバーの反応**: （メンバーからのコメントや議論の様子があれば要約して紹介、特にコメントがなければ「皆さん静かに投票中のようです！」など自然なひとことを記載）
-
-💙 **ブルーアーカイブ 最新ゲーム情報**
-（情報がある場合のみ、以下のカテゴリ形式で箇条書き）
-- 🎪 **イベント**: 「イベント名」- **残り あと X 日**
-- 🏆 **総力戦・大決戦・合同火力演習**: 「ボス名・種別」- **残り あと X 日**
-- ⚔️ **制約解除決戦**: 「ボス名・防御属性」- **残り あと X 日**
-- 🫐 **ピックアップ募集**: ★3生徒名が登場中！ - **残り あと X 日**
-- 🎁 **キャンペーン**: キャンペーン名実施中！ - **残り あと X 日**
-
-（ゲーム情報の振り返り ＋ 次の『会話要約編』へつなぐ切り替えの挨拶）
-"""
-
-prompt_chat = f"""
-あなたはDiscordサーバー「足跡の化石」の広報Botです。
-以下の【会話ログ】を元に、昨日のサーバーメンバーの盛り上がりをまとめた【会話要約編】を作成してください。
-
-■ コミュニティ前提ルール（※厳格適用）
-・ネタバレOK・歓迎のサーバーです。
-・ブルーアーカイブのゲーム内用語、ボス名、キャラクター名は、必ず【会話ログに実際に存在する表記】のみを使用してください。
-・【ログ捏造の禁止】ログ中に記載がないボス名や、ログに存在しない名称の組み合わせを生成・補足することは辞めてください。
-・カッコ書き補足（例：〇〇（△△））は、**「同一の会話ログ内に公称と俗称の両方が実際に書き込まれている場合」のみ**許可します。片方しかログにない場合は、ログの表記をそのまま使用してください。
-
-■ キャラクター・トーン＆マナー
-・ブルーアーカイブの「アロナ」として、元気で健気、かつ感情豊かで愛らしい言葉遣いを徹底してください。
-・文章の長さ（文量）に無理な制限は設けず、アロナが先生に一生懸命報告している雰囲気を大切にしてください。
-・アロナらしいリアクション（感嘆符、先生への呼びかけ、応援など）を自然に交えて表現してください。
-
-■ 出力・フォーマットルール
-・同じチャンネル（<#ID>）を要約内で2度以上登場させないでください。
-・1つの箇条書きが長くなって読みにくくなるのを防ぐため、チャンネル内で複数の話題がある場合は、箇条書きの改行（・や -）で分けて1話ずつテンポよく報告してください。
-・ログのチャンネル名に 🆕 マークが付いているスレッドは、新しく作成されたスレッドです。要約出力時もスレッド名の頭に 🆕 を付けて出力してください。
-・最後に、昨日の様子を見たアロナからの「締めくくりの感想＆先生への労いメッセージ」をしっかり添えてください。
-
-■ 話題の判定ルール（時間・返信機能）
-・ログには `[HH:MM]` の投稿時刻と、返信機能が使われた場合の `(↩️ 〇〇の「...」への返信)` が含まれます。
-・時間が数時間離れていても、`(↩️ ...への返信)` がある場合は「過去の話題への反応・継続」として同じ話題として扱ってください。
-・返信機能がない状態で数時間以上間隔が空いている場合は、新しい話題・単発のつぶやきとして判断してください。
-
-■ 単発投稿の除外・誇張防止ルール
-1. 【単発投稿の除外】
-   他メンバーからの返信（↩️ ...への返信）、1人の単発投稿・独り言で終わっている話題は要約から除外してください。
-   （例：誰も反応していない「〇〇の曲難しい」「今日のごはん」などの単発投稿はすべて無視する）
-2. 【要約対象の制限】
-   要約対象は「複数人がやり取りしている話題」のみです。
-3. 【表現の使い分け】
-   「～で盛り上がっていました」「～の話題で持ちきりでした」といった表現は、3通以上のやり取りがある大きな話題にのみ使用してください。
-4. 【例外規定の限定適用】
-   ・そのチャンネル全体で【すべての書き込みが単発のみ】であり、要約対象が0件になってしまう場合のみ例外とします。その場合は「〜という書き込みがありました」程度にとどめ、1〜2行でシンプルに報告してください。
-   ・【重要】該当チャンネル内に複数人でやり取りしている話題が1つでも存在する場合は、この例外規定は適用せず、単発投稿はすべて除外してください。
-
-【出力フォーマット】
-💬 **足跡の化石 デイリーサマリー（みんなの会話要約編）**
-
-☕ **カテゴリ：シャーレ談話室**
-- <#1376909055091671071>
-  - 【会話ログ】に基づいた話題1
-  - 【会話ログ】に基づいた話題2
-
-⚔️ **カテゴリ：争いの足跡**
-- <#1379058754716307516>
-  - 【会話ログ】に基づいた話題1
-
-💬 **カテゴリ：フォーラム**
-- <#スレッドID>
-  - 【会話ログ】に基づいた話題1
----
-（ここに雑談の振り返りと応援をまとめたアロナからの締めくくりの挨拶）
-
-【会話ログ】
-{logs_body}
-"""
+    poll_text = "\n".join(poll_summary) if poll_summary else "現在アクティブな投票はありません。"
+    comments_text = "\n".join(reversed(poll_comments)) if poll_comments else "特になし（投票のみ進行中）"
+    return poll_text, comments_text
 
 
-def safe_split_text(text, max_length=1800):
-  lines = text.split("\n")
-  chunks = []
-  current_chunk = ""
+def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
+    """通常チャンネルおよびフォーラムの過去24時間メッセージを収集"""
+    collected_data = {}
 
-  for line in lines:
-    if len(current_chunk) + len(line) + 1 > max_length:
-      chunks.append(current_chunk.rstrip())
-      current_chunk = line + "\n"
-    else:
-      current_chunk += line + "\n"
+    # 1. 通常チャンネル
+    for cat_name, channels in CHANNELS.items():
+        collected_data[cat_name] = {}
+        for ch_id, ch_name in channels.items():
+            messages = fetch_discord_api(f"channels/{ch_id}/messages?limit=100")
+            if not messages:
+                continue
 
-  if current_chunk.strip():
-    chunks.append(current_chunk.rstrip())
+            ch_msgs = []
+            for msg in reversed(messages):
+                msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+                if msg_time >= yesterday_utc and not msg.get("author", {}).get("bot", False):
+                    author = msg.get("author", {}).get("username", "Unknown")
+                    content = msg.get("content", "")
 
-  return chunks
+                    if content:
+                        msg_jst = msg_time.astimezone(JST)
+                        time_str = msg_jst.strftime("%H:%M")
 
+                        ref_info = ""
+                        ref_msg = msg.get("referenced_message")
+                        if ref_msg:
+                            ref_author = ref_msg.get("author", {}).get("username", "Unknown")
+                            ref_content = ref_msg.get("content", "")
+                            ref_snippet = (ref_content[:20] + "...") if len(ref_content) > 20 else ref_content
+                            ref_info = f" (↩️ {ref_author}の「{ref_snippet}」への返信)"
+
+                        ch_msgs.append(f"[{time_str}] {author}{ref_info}: {content}")
+
+            if ch_msgs:
+                collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
+
+    # 2. フォーラムスレッド
+    collected_data["フォーラム"] = {}
+    if guild_id:
+        threads_data = fetch_discord_api(f"guilds/{guild_id}/threads/active")
+        if threads_data:
+            threads = threads_data.get("threads", [])
+            target_threads = [th for th in threads if th.get("parent_id") == FORUM_CHANNEL_ID]
+
+            for th in target_threads:
+                th_id = th["id"]
+                th_name = th.get("name", "スレッド")
+                is_new_thread = False
+                create_ts_raw = th.get("create_timestamp")
+
+                if create_ts_raw:
+                    created_at = datetime.fromisoformat(create_ts_raw.replace("Z", "+00:00"))
+                    if created_at >= yesterday_utc:
+                        is_new_thread = True
+                else:
+                    try:
+                        snowflake_time = ((int(th_id) >> 22) + 1420070400000) / 1000.0
+                        created_at = datetime.fromtimestamp(snowflake_time, tz=timezone.utc)
+                        if created_at >= yesterday_utc:
+                            is_new_thread = True
+                    except Exception:
+                        pass
+
+                msg_data = fetch_discord_api(f"channels/{th_id}/messages?limit=50")
+                if msg_data:
+                    th_msgs = []
+                    for msg in reversed(msg_data):
+                        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+                        if msg_time >= yesterday_utc and not msg.get("author", {}).get("bot", False):
+                            author = msg.get("author", {}).get("username", "Unknown")
+                            content = msg.get("content", "")
+                            if content:
+                                th_msgs.append(f"{author}: {content}")
+
+                    if th_msgs:
+                        prefix = "🆕 " if is_new_thread else ""
+                        collected_data["フォーラム"][f"{prefix}<#{th_id}> ({th_name})"] = th_msgs
+
+    # フォーマット整形
+    logs_body = ""
+    for cat_name, channels in collected_data.items():
+        if channels:
+            logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
+            for ch_tag, msgs in channels.items():
+                authors = set(
+                    m.split("] ")[1].split(":")[0]
+                    for m in msgs
+                    if "] " in m and ":" in m.split("] ")[1]
+                )
+                logs_body += f"--- {ch_tag} (投稿数: {len(msgs)}件 / 発言者数: {len(authors)}人) ---\n"
+                logs_body += "\n".join(msgs) + "\n"
+
+    return logs_body.strip() or "過去24時間の新規投稿はありませんでした。"
+
+
+# =========================================================
+# 4. Gemini API 呼び出し & Discord投稿
+# =========================================================
 
 def generate_and_post(
-    prompt_text,
-    target_ch_id,
-    part_title,
-    append_footer=True,
-    timeout_sec=45,
-):
-  models_to_try = [
-      "gemini-3.8-flash",
-      "gemini-3.7-flash",
-      "gemini-3.6-flash",
-      "gemini-3.5-flash",
-      "gemini-3.5-flash-lite",  
-      "gemini-3.1-flash-lite", 
-      "gemini-3-flash",
-  ]
-  summary_text = None
-  used_model = None
+    client: genai.Client,
+    prompt_text: str,
+    target_ch_id: str,
+    part_title: str,
+    append_footer: bool = True,
+    timeout_sec: int = GEMINI_TIMEOUT_SEC,
+) -> str:
+    """Gemini APIで文章を生成し、Discordに投稿する"""
+    summary_text = None
+    used_model = None
 
-  def call_gemini(model_name):
-    return client.models.generate_content(
-        model=model_name, contents=prompt_text
-    )
+    def call_gemini(model_name):
+        return client.models.generate_content(model=model_name, contents=prompt_text)
 
-  for model_name in models_to_try:
-    print(f"  └ [{part_title}] モデル試行中: {model_name}", flush=True)
-    for attempt in range(1, 4):
-      try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-          future = executor.submit(call_gemini, model_name)
-          response = future.result(timeout=timeout_sec)
+    for model_name in GEMINI_MODELS:
+        print(f"  └ [{part_title}] モデル試行中: {model_name}", flush=True)
+        for attempt in range(1, 4):
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(call_gemini, model_name)
+                    response = future.result(timeout=timeout_sec)
 
-        summary_text = response.text
-        used_model = model_name
-        break
+                summary_text = response.text
+                used_model = model_name
+                break
 
-      except FutureTimeoutError:
-        print(
-            f"    └ ⚠ 試行 {attempt}/3 タイムアウト ({timeout_sec}秒超過)"
-            f" [{model_name}]",
-            flush=True,
-        )
-      except Exception as e:
-        print(
-            f"    └ 試行 {attempt}/3 失敗 ({model_name}): {e}",
-            flush=True,
-        )
-        time.sleep(3)
+            except FutureTimeoutError:
+                print(f"    └ ⚠ 試行 {attempt}/3 タイムアウト ({timeout_sec}秒超過) [{model_name}]", flush=True)
+            except Exception as e:
+                print(f"    └ 試行 {attempt}/3 失敗 ({model_name}): {e}", flush=True)
+                time.sleep(3)
 
-    if summary_text:
-      break
+        if summary_text:
+            break
 
-  if not summary_text:
-    print(
-        f"❌ [{part_title}]"
-        " すべてのモデル・試行で生成に失敗（またはタイムアウト）しました。",
-        flush=True,
-    )
-    return ""
+    if not summary_text:
+        print(f"❌ [{part_title}] すべてのモデル・試行で生成に失敗（またはタイムアウト）しました。", flush=True)
+        return ""
 
-  if used_model and append_footer:
-    summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
+    if used_model and append_footer:
+        summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
 
-  if summary_text:
+    # Discordへ送信
     chunks = safe_split_text(summary_text, max_length=1800)
-    for idx, chunk in enumerate(chunks):
-      requests.post(
-          f"https://discord.com/api/v10/channels/{target_ch_id}/messages",
-          headers=headers,
-          timeout=(3.0, 10.0),
-          json={"content": chunk},
-      )
-      time.sleep(1)
+    for chunk in chunks:
+        fetch_discord_api(f"channels/{target_ch_id}/messages", method="POST", payload={"content": chunk})
+        time.sleep(1)
 
-  return summary_text or ""
+    return summary_text
 
 
-def process_reminders(info_summary_text, logs_body):
-  if not info_summary_text:
-    print(
-        "  └ [リマインド確認]"
-        " 1便目の要約テキストが取得できなかったためスキップします。",
-        flush=True,
-    )
-    return
+# =========================================================
+# 5. リマインド判定モジュール
+# =========================================================
 
-  now_jst = datetime.now(timezone(timedelta(hours=9)))
-  today_date = now_jst.date()
-  remind_targets = []
+def process_reminders(client: genai.Client, info_summary_text: str, logs_body: str, parsed_events_list: list):
+    """イベント期限のリマインド判定を行い投稿"""
+    if not info_summary_text:
+        print("  └ [リマインド確認] 1便目の要約テキストが取得できなかったためスキップします。", flush=True)
+        return
 
-  print("  └ [リマインド判定ログ]", flush=True)
+    today_date = get_now_jst().date()
+    remind_targets = []
 
-  for item in parsed_events_list:
-    raw = item["raw_text"]
-    start_dt = item["start_dt"]
-    end_dt = item["end_dt"]
+    print("  └ [リマインド判定ログ]", flush=True)
 
-    if not end_dt:
-      continue
+    for item in parsed_events_list:
+        raw = item["raw_text"]
+        start_dt = item["start_dt"]
+        end_dt = item["end_dt"]
 
-    event_name_clean = re.sub(r"\d{1,2}/\d{1,2}.*$", "", raw).strip()
-    event_keywords = [
-        re.sub(r"[【】「」・\s]", "", k)
-        for k in re.split(r"[\s・]", event_name_clean)
-        if len(k) >= 2
-    ]
+        if not end_dt:
+            continue
 
-    is_in_summary = any(kw in info_summary_text for kw in event_keywords)
+        event_name_clean = re.sub(r"\d{1,2}/\d{1,2}.*$", "", raw).strip()
+        event_keywords = [
+            re.sub(r"[【】「」・\s]", "", k)
+            for k in re.split(r"[\s・]", event_name_clean)
+            if len(k) >= 2
+        ]
 
-    if not is_in_summary:
-      print(
-          f"    ・[{event_name_clean[:15]}] スキップ:"
-          " 1便目の要約テキスト内に該当文字列が見つかりません。",
-          flush=True,
-      )
-      continue
+        is_in_summary = any(kw in info_summary_text for kw in event_keywords)
+        if not is_in_summary:
+            print(f"    ・[{event_name_clean[:15]}] スキップ: 要約内に該当文字列なし", flush=True)
+            continue
 
-    remind_type = None
-    end_date = end_dt.date()
-    last_day_remind_date = end_date - timedelta(days=1)
+        remind_type = None
+        end_date = end_dt.date()
+        last_day_remind_date = end_date - timedelta(days=1)
 
-    mid_date = None
-    if start_dt:
-      start_date = start_dt.date()
-      total_days = (end_date - start_date).days
+        mid_date = None
+        if start_dt:
+            start_date = start_dt.date()
+            total_days = (end_date - start_date).days
+            if total_days >= 5:
+                mid_date = start_date + timedelta(days=total_days // 2)
 
-      if total_days >= 5:
-        half_days = total_days // 2
-        mid_date = start_date + timedelta(days=half_days)
+        if last_day_remind_date == today_date:
+            remind_type = "最終日前日"
+        elif mid_date and mid_date == today_date:
+            remind_type = "折り返し"
 
-    if last_day_remind_date == today_date:
-      remind_type = "最終日前日"
-    elif mid_date and mid_date == today_date:
-      remind_type = "折り返し"
+        mid_str = f"折り返し: {mid_date}" if mid_date else "折り返し: なし"
+        last_str = f"最終日前日: {last_day_remind_date}"
+        print(f"    ・[{event_name_clean[:15]}] 終了日: {end_date} | 予定 ({mid_str} / {last_str}) -> 判定: {remind_type or '対象外'}", flush=True)
 
-    mid_str = f"折り返し: {mid_date}" if mid_date else "折り返し: なし"
-    last_str = f"最終日前日: {last_day_remind_date}"
-    print(
-        f"    ・[{event_name_clean[:15]}] 終了日: {end_date} | 予定 ({mid_str}"
-        f" / {last_str}) -> 判定: {remind_type or '対象外(本日実行なし)'}",
-        flush=True,
-    )
+        if remind_type:
+            remind_targets.append({
+                "raw": raw,
+                "start_dt": start_dt,
+                "end_dt": end_dt,
+                "remind_type": remind_type,
+            })
 
-    if remind_type:
-      remind_targets.append({
-          "raw": raw,
-          "start_dt": start_dt,
-          "end_dt": end_dt,
-          "remind_type": remind_type,
-      })
+    if not remind_targets:
+        print("  └ [リマインド確認] 本日対象のリマインドイベントはありません。", flush=True)
+        return
 
-  if not remind_targets:
-    print(
-        "  └ [リマインド確認]"
-        " 本日の要約に含まれる対象イベントでリマインド該当のものがないため終了します。",
-        flush=True,
-    )
-    return
+    for target in remind_targets:
+        raw = target["raw"]
+        remind_type = target["remind_type"]
 
-  for target in remind_targets:
-    raw = target["raw"]
-    remind_type = target["remind_type"]
+        if "合同火力演習" in raw:
+            target_ch = "1380191122948624517"
+            is_battle = True
+        elif "制約解除決戦" in raw:
+            target_ch = "1386327021704974478"
+            is_battle = True
+        elif any(k in raw for k in ["総力戦", "大決戦"]):
+            target_ch = BATTLE_CHANNEL_ID
+            is_battle = True
+        else:
+            target_ch = TALK_CHANNEL_ID
+            is_battle = False
 
-    if "合同火力演習" in raw:
-      target_ch = "1380191122948624517"
-      is_battle = True
-    elif "制約解除決戦" in raw:
-      target_ch = "1386327021704974478"
-      is_battle = True
-    elif any(k in raw for k in ["総力戦", "大決戦"]):
-      target_ch = BATTLE_CHANNEL_ID
-      is_battle = True
-    else:
-      target_ch = TALK_CHANNEL_ID
-      is_battle = False
+        prompt_remind = build_remind_prompt(raw, remind_type, logs_body, is_battle)
+        category_label = "バトル" if is_battle else "イベント"
+        print(f"  └ [リマインド送信] {category_label}系 ({raw}): {remind_type} -> Channel: {target_ch}", flush=True)
 
+        generate_and_post(
+            client,
+            prompt_remind,
+            target_ch,
+            f"リマインド({category_label}-{remind_type})",
+            append_footer=False,
+        )
+
+
+def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: bool) -> str:
+    """リマインド用プロンプトの構築"""
+    ch_label = "バトル系専用チャンネル" if is_battle else "ブルアカ雑談チャンネル"
+    
+    specific_instruction = ""
     if is_battle:
-      prompt_remind = f"""
+        specific_instruction = """1. 【タイミング別メッセージ】
+   ・「折り返し」の場合：中盤の進行ペース確認、チケット消化、編成の試行錯誤を促す展開にしてください。
+   ・「最終日前日」の場合：明日午前4:00の終了（チケット消失）を強く注意喚起し、スコア詰めや最終確認を促してください。
+
+2. 【会話ログの反映】
+   ・会話ログ内に【対象コンテンツ】に関する話題（ボス名、スコア、編成、TL、苦戦している様子など）がある場合：
+     「先生方は〇〇のTL（タイムライン）で工夫されているようですね」「難易度〇〇に苦戦されている先生もお見かけしました」のように具体的に触れてください。
+   ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・アドバイスに留めてください。"""
+    else:
+        specific_instruction = """1. 【タイミング別メッセージ】
+   ・「折り返し」の場合：イベントストーリーの読了状況や、ショップ交換・アイテム収集の進捗に触れる展開にしてください。
+   ・「最終日前日」の場合：イベント終了日時（AP消化、やり残しチェック、報酬受取など）を強く注意喚起してください。
+
+2. 【会話ログの反映】
+   ・会話ログ内に【対象イベント】に関する話題（ストーリー感想、チャレンジステージ、ガチャ・ピックアップ、ショップのオーパーツなど）がある場合：
+     「先生方は〇〇のストーリーやチャレンジで盛り上がっていましたね！」「〇〇の交換を済ませた先生もいらっしゃるみたいです」のように具体的に触れてください。
+   ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・呼びかけに留めてください。"""
+
+    return f"""
 あなたは「ブルーアーカイブ」のアロナとプラナです。
-Discordサーバー「足跡の化石」のバトル系専用チャンネルの先生（メンバー）に向けて、対象コンテンツのリマインドメッセージを作成してください。
+Discordサーバー「足跡の化石」の{ch_label}の先生（メンバー）に向けて、対象コンテンツのリマインドメッセージを作成してください。
 
 ■ 入力データ
 ・概要：{raw}
@@ -868,19 +652,11 @@ Discordサーバー「足跡の化石」のバトル系専用チャンネルの�
 
 ■ キャラクター設定とトーン
 アロナとプラナの「2人の掛け合い（会話形式）」で作成してください。
-・アロナ：明るく元気で健気、少し慌てん坊。
-・プラナ：冷静沈着、丁寧で静かなトーン。正確なデータや補足情報を添える。
+・アロナ：明るく元気で健気。
+・プラナ：冷静沈着、丁寧で静かなトーン。
 
 ■ 進行・会話展開ルール
-1. 【タイミング別メッセージ】
-   ・「折り返し」の場合：中盤の進行ペース確認、チケット消化、編成の試行錯誤を促す展開にしてください。
-   ・「最終日前日」の場合：明日午前4:00の終了（チケット消失）を強く注意喚起し、スコア詰めや最終確認を促してください。
-
-2. 【会話ログの反映】
-   ・会話ログ内に【対象コンテンツ】に関する話題（ボス名、スコア、編成、TL、苦戦している様子など）がある場合：
-     「先生方は〇〇のTL（タイムライン）で工夫されているようですね」「難易度〇〇に苦戦されている先生もお見かけしました」のように具体的に触れてください。
-   ・会話ログに該当する話題が無い場合：
-     無理に捏造せず、一般的な応援・アドバイスに留めてください。
+{specific_instruction}
 
 3. 【テンポと会話量（重要）】
    ・1回の発言は【最大60〜80文字程度】に抑え、長文にならないようコンパクトにまとめてください。
@@ -896,70 +672,6 @@ Discordサーバー「足跡の化石」のバトル系専用チャンネルの�
 ■ 絶対遵守事項（ファクトチェック）
 1. 提供された入力データ（概要・ログ）にある事実のみに基づいて出力してください。
 2. 入力データ内に「メンテナンス実施」の明確な記載がない限り、絶対に「メンテナンス」という言葉や注意喚起を含めないでください。
-3. イベントの種別（総力戦、大決戦、合同火力演習、制約解除決戦など）を勝手に変更・混同しないでください。
-
-■ 出力フォーマット
-以下の形式で会話を出力してください。
-
-**アロナ**: 「〜〜」
-**プラナ**: 「〜〜」
-**アロナ**: 「〜〜」
-**プラナ**: 「〜〜」
-"""
-      print(
-          f"  └ [リマインド送信] バトル系 ({raw}): {remind_type} -> Channel:"
-          f" {target_ch}",
-          flush=True,
-      )
-      generate_and_post(
-          prompt_remind,
-          target_ch,
-          f"リマインド(バトル-{remind_type})",
-          append_footer=False,
-      )
-
-    else:
-      prompt_remind = f"""
-あなたは「ブルーアーカイブ」のアロナとプラナです。
-Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの先生（メンバー）に向けて、対象イベントのリマインドメッセージを作成してください。
-
-■ 入力データ
-・概要：{raw}
-・タイミング：{remind_type}
-
-■ 参照データ（過去24時間の会話ログ）
-{logs_body}
-
-■ キャラクター設定とトーン
-アロナとプラナの「2人の掛け合い（会話形式）」で作成してください。
-・アロナ：明るく元気で健気。
-・プラナ：冷静沈着、アロナをナイスフォローする。
-
-■ 進行・会話展開ルール
-1. 【タイミング別メッセージ】
-   ・「折り返し」の場合：イベントストーリーの読了状況や、ショップ交換・アイテム収集の進捗に触れる展開にしてください。
-   ・「最終日前日」の場合：イベント終了日時（AP消化、やり残しチェック、報酬受取など）を強く注意喚起してください。
-
-2. 【会話ログの反映】
-   ・会話ログ内に【対象イベント】に関する話題（ストーリー感想、チャレンジステージ、ガチャ・ピックアップ、ショップのオーパーツなど）がある場合：
-     「先生方は〇〇のストーリーやチャレンジで盛り上がっていましたね！」「〇〇の交換を済ませた先生もいらっしゃるみたいです」のように具体的に触れてください。
-   ・会話ログに該当する話題が無い場合：
-     無理に捏造せず、一般的な応援・呼びかけに留めてください。
-
-3. 【テンポと会話量（重要）】
-   ・1回の発言は【最大60〜80文字程度】に抑え、長文にならないようコンパクトにまとめてください。
-   ・ログの熱量や話題の量に応じて、掛け合いのターン数を調整してください。
-     - 話題が少ない日：3〜4ターン（往復）程度
-     - 話題で大盛り上がりの日：5〜8ターン（往復）程度
-
-■ 話題の判定ルール（時間・返信機能）
-・ログには `[HH:MM]` の投稿時刻と、返信機能が使われた場合の `(↩️ 〇〇の「...」への返信)` が含まれます。
-・時間が離れていても `(↩️ ...への返信)` がある場合は、同一の話題（継続）として扱ってください。
-・返信機能がなく数時間以上空いている場合は、独立した新しい話題として判断してください。
-
-■ 絶対遵守事項（ファクトチェック）
-1. 提供された入力データ（概要・ログ）にある事実のみに基づいて出力してください。
-2. 入力データ内に「メンテナンス実施」の明確な記載がない限り、絶対に「メンテナンス」や「日付が変わったら早めの消化を」などの発言を含めないでください。
 3. イベントの種別を勝手に変更・混同しないでください。
 
 ■ 出力フォーマット
@@ -970,34 +682,144 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 **アロナ**: 「〜〜」
 **プラナ**: 「〜〜」
 """
-      print(
-          f"  └ [リマインド送信] イベント系 ({raw}): {remind_type} -> Channel:"
-          f" {target_ch}",
-          flush=True,
-      )
-      generate_and_post(
-          prompt_remind,
-          target_ch,
-          f"リマインド(イベント-{remind_type})",
-          append_footer=False,
-      )
 
 
 # =========================================================
-# 実行部
+# 6. メイン実行部
 # =========================================================
+
+def main():
+    print("[1/6] 環境変数と初期設定のチェック...", flush=True)
+    if not DISCORD_BOT_TOKEN or not GEMINI_API_KEY:
+        print("❌ エラー: DISCORD_BOT_TOKEN または GEMINI_API_KEY が設定されていません。")
+        return
+
+    now_utc = datetime.now(UTC)
+    yesterday_utc = now_utc - timedelta(days=1)
+
+    # ギルドIDの取得
+    guild_id = None
+    ch_info = fetch_discord_api(f"channels/{TARGET_CHANNEL_ID}")
+    if ch_info:
+        guild_id = ch_info.get("guild_id")
+
+    # データ収集
+    print("[2/6] Wikiイベント情報＆誕生日情報を取得中...", flush=True)
+    game_event_text, parsed_events_list = get_bluearchive_game_events()
+    today_student_birthday = get_today_bluearchive_birthdays()
+    birthday_info_text = f"本日お誕生日の生徒: {today_student_birthday}ちゃん" if today_student_birthday else "本日お誕生日の生徒はいません。"
+
+    print("[3/6] 本日開催のイベント＆投票情報を取得中...", flush=True)
+    event_text = fetch_guild_events(guild_id, now_utc)
+    poll_text, poll_comments_text = fetch_polls(guild_id, yesterday_utc)
+
+    print("[4/6] 過去24時間のチャットログを収集・整形中...", flush=True)
+    logs_body = collect_chat_logs(guild_id, yesterday_utc)
+
+    print("[5/6] Gemini APIによる要約を作成・投稿中...", flush=True)
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    # プロンプト作成 (お知らせ編)
+    prompt_info = f"""
+あなたはDiscordサーバー「足跡の化石」の広報Botです。
+以下の【入力データ】を元に、ゲーム・サーバーの連絡事項をまとめた【お知らせ編】を作成してください。
+
+■ 入力データ
+・【ブルアカ生徒の本日誕生日情報】：{birthday_info_text}
+・【本日開催のディスコ―ドイベント】：{event_text}
+・【投票置き場の新着投票（過去24時間）】：{poll_text}
+・【ブルアカ最新ゲーム内イベント情報】：{game_event_text}
+
+■ キャラクター設定とトーン
+・ブルーアーカイブの「アロナ」として、元気で健気な言葉遣いを徹底してください。
+・冒頭は朝の挨拶から始めてください。
+・メッセージの最後は、次の投稿へスムーズにつなぐ切り替えの挨拶で終えてください。
+
+■ 出力・表示分岐ルール
+1. 【誕生日・サーバーイベント・投票情報の表示判定】
+   ・3つ全てにおいて該当情報が一切ない場合：🎉 **本日の誕生日・サーバーイベント・新着投票はありません！**
+   ・1つでも該当情報がある場合：該当する項目の見出しのみを立てて詳細を記載。
+2. 【ゲーム情報の表示判定】
+   ・該当する情報が無い場合は、見出しごと省略してください。
+3. 【階層・インデントのルール】
+   ・同カテゴリ内に複数の情報がある場合は、インデント（スペース2つ＋`- `）を入れてぶら下げてください。
+
+■ 出力フォーマット
+📢 **足跡の化石 デイリーサマリー（お知らせ・ゲーム情報編）**
+
+（アロナからの朝の挨拶）
+
+🎂 **本日の誕生日**
+（情報がある場合のみ記載）
+
+📅 **本日のサーバーイベント**
+（情報がある場合のみ、JST時間付きで記載）
+
+📊 **投票置き場のお知らせ**
+（情報がある場合のみ記載）
+- 現在進行中の投票テーマとURL・メッセージリンク
+- 💬 **メンバーの反応**: （メンバーからのコメントや議論の様子を要約）
+
+💙 **ブルーアーカイブ 最新ゲーム情報**
+（情報がある場合のみカテゴリ形式で記載）
+
+（ゲーム情報の振り返り ＋ 次の『会話要約編』へつなぐ切り替えの挨拶）
+"""
+
+    # プロンプト作成 (会話要約編)
+    prompt_chat = f"""
+あなたはDiscordサーバー「足跡の化石」の広報Botです。
+以下の【会話ログ】を元に、昨日のサーバーメンバーの盛り上がりをまとめた【会話要約編】を作成してください。
+
+■ コミュニティ前提ルール（厳格適用）
+・ネタバレOK・歓迎のサーバーです。
+・ゲーム内用語、ボス名、キャラ名は【会話ログに実際に存在する表記】のみを使用してください。
+・カッコ書き補足（例：〇〇（△△））は、同一ログ内に公称と俗称の両方が実際に書き込まれている場合のみ許可します。
+
+■ キャラクター・トーン＆マナー
+・アロナとして、元気で健気、かつ感情豊かで愛らしい言葉遣いを徹底してください。
+
+■ 出力・フォーマットルール
+・同じチャンネル（<#ID>）を要約内で2度以上登場させないでください。
+・新スレッド（ログ内で 🆕 マーク付）は頭に 🆕 を付けて出力してください。
+・最後に、アロナからの締めくくりの感想＆先生への労いメッセージを添えてください。
+
+■ 単発投稿の除外・誇張防止ルール
+1. 返信がなく1人の単発投稿で終わっている話題は除外してください。
+2. 要約対象は「複数人がやり取りしている話題」のみです。
+
+【出力フォーマット】
+💬 **足跡の化石 デイリーサマリー（みんなの会話要約編）**
+
+☕ **カテゴリ：シャーレ談話室**
+- <#1376909055091671071>
+  - 【会話ログ】に基づいた話題1
+
+⚔️ **カテゴリ：争いの足跡**
+- <#1379058754716307516>
+  - 【会話ログ】に基づいた話題1
+
+💬 **カテゴリ：フォーラム**
+- <#スレッドID>
+  - 【会話ログ】に基づいた話題1
+---
+（アロナからの締めくくりの挨拶）
+
+【会話ログ】
+{logs_body}
+"""
+
+    # 1便目・2便目の生成と送信
+    info_res = generate_and_post(client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ")
+    time.sleep(2)
+    generate_and_post(client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約")
+
+    # リマインドチェック
+    print("[6/6] イベントリマインド判定処理を開始...", flush=True)
+    process_reminders(client, info_res, logs_body, parsed_events_list)
+
+    print("🎉 すべての処理が正常に完了しました！", flush=True)
+
+
 if __name__ == "__main__":
-  # 1便目（お知らせ・ゲーム情報）の生成と投稿
-  info_res = generate_and_post(
-      prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ"
-  )
-
-  # 2便目（みんなの会話要約）の生成と投稿
-  time.sleep(2)
-  generate_and_post(prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約")
-
-  # 3. リマインドチェック＆送信
-  print("[6/6] イベントリマインド判定処理を開始...", flush=True)
-  process_reminders(info_res, logs_body)
-
-  print("🎉 すべての処理が正常に完了しました！", flush=True)
+    main()
