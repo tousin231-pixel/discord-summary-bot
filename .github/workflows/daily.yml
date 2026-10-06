@@ -5,10 +5,13 @@ on:
   # 毎日 日本時間 午前5:20（UTC 20:38）に自動実行
     - cron: '17 20 * * *'
   workflow_dispatch: # 手動実行ボタン
+  
 
 jobs:
   summarize:
     runs-on: ubuntu-latest
+    # ↓ ジョブ全体のタイムアウトを30分に設定（ハング対策）
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
