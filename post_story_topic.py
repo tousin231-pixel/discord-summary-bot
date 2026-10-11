@@ -4,6 +4,7 @@ import re
 import time
 from google import genai
 import requests
+import concurrent.futures
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -136,6 +137,24 @@ def get_thread_recent_messages(thread_id, limit=50):
     return "（投稿内容が取得できませんでした）"
 
 
+import concurrent.futures
+# （中略）
+
+def call_gemini_with_timeout(client, model_name, prompt, timeout_sec=60):
+    """
+    指定した秒数（デフォルト60秒）でGemini APIの呼び出しをタイムアウトさせます
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            client.models.generate_content,
+            model=model_name,
+            contents=prompt
+        )
+        try:
+            return future.result(timeout=timeout_sec)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(f"Gemini APIが {timeout_sec} 秒以内に応答しませんでした（タイムアウト）")
+
 def generate_content_with_fallback(client, prompt):
     """
     各モデルで最大3回チャレンジし、駄目なら次のモデルへ切り替えます。
@@ -144,9 +163,9 @@ def generate_content_with_fallback(client, prompt):
         print(f"🤖 モデル [{model_name}] で生成を試みます...", flush=True)
         for attempt in range(1, 4):
             try:
-                response = client.models.generate_content(
-                    model=model_name, contents=prompt
-                )
+                # タイムアウト付きの関数を呼び出す（ここでは60秒に設定）
+                response = call_gemini_with_timeout(client, model_name, prompt, timeout_sec=60)
+                
                 if response and response.text:
                     print(
                         f"  └  成功！ (モデル: {model_name}, 試行回数: {attempt}回目)",
