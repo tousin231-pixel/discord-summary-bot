@@ -20,7 +20,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # タイムアウト設定 (接続, 読み込み)
 HTTP_TIMEOUT = (6.0, 20.0)
-GEMINI_TIMEOUT_SEC = 90
+GEMINI_TIMEOUT_SEC = 45
 
 # 共通ヘッダー
 DISCORD_HEADERS = {
