@@ -22,6 +22,9 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 HTTP_TIMEOUT = (6.0, 20.0)
 GEMINI_TIMEOUT_SEC = 45
 
+# Gemini処理全体の制限時間
+GEMINI_TOTAL_TIMEOUT_SEC = 120
+
 # 共通ヘッダー
 DISCORD_HEADERS = {
     "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
@@ -480,45 +483,189 @@ def generate_and_post(
     append_footer: bool = True,
     timeout_sec: int = GEMINI_TIMEOUT_SEC,
 ) -> str:
-    """Gemini APIで文章を生成し、Discordに投稿する"""
+
     summary_text = None
     used_model = None
 
+    # Gemini全体タイムアウト監視
+    gemini_start = time.time()
+
     def call_gemini(model_name):
-        return client.models.generate_content(model=model_name, contents=prompt_text)
+        return client.models.generate_content(
+            model=model_name,
+            contents=prompt_text
+        )
 
     for model_name in GEMINI_MODELS:
-        print(f"  └ [{part_title}] モデル試行中: {model_name}", flush=True)
+
+        # 全体タイムアウト
+        elapsed_total = time.time() - gemini_start
+
+        if elapsed_total > GEMINI_TOTAL_TIMEOUT_SEC:
+            print(
+                f"❌ [{part_title}] Gemini処理全体タイムアウト "
+                f"({GEMINI_TOTAL_TIMEOUT_SEC}秒)",
+                flush=True
+            )
+            break
+
+        print(
+            f"  └ [{part_title}] モデル試行中: {model_name}",
+            flush=True
+        )
+
         for attempt in range(1, 4):
+
             try:
+                start = time.time()
+
                 with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(call_gemini, model_name)
-                    response = future.result(timeout=timeout_sec)
+
+                    future = executor.submit(
+                        call_gemini,
+                        model_name
+                    )
+
+                    response = future.result(
+                        timeout=timeout_sec
+                    )
+
+                elapsed = time.time() - start
+
+                print(
+                    f"    └ 成功 "
+                    f"({elapsed:.1f}秒) "
+                    f"[{model_name}]",
+                    flush=True
+                )
 
                 summary_text = response.text
                 used_model = model_name
                 break
 
             except FutureTimeoutError:
-                print(f"    └ ⚠ 試行 {attempt}/3 タイムアウト ({timeout_sec}秒超過) [{model_name}]", flush=True)
+
+                print(
+                    f"    └ ⚠ タイムアウト "
+                    f"({timeout_sec}秒超過) "
+                    f"[{model_name}] "
+                    f"試行 {attempt}/3",
+                    flush=True
+                )
+
             except Exception as e:
-                print(f"    └ 試行 {attempt}/3 失敗 ({model_name}): {e}", flush=True)
+
+                err = str(e)
+
+                # ===== 503系 =====
+                if (
+                    "503" in err
+                    or "UNAVAILABLE" in err
+                    or "high demand" in err
+                ):
+
+                    print(
+                        f"    └ ⚠ Gemini混雑検知 "
+                        f"[{model_name}] "
+                        f"→ 次モデルへ切替",
+                        flush=True
+                    )
+
+                    break
+
+                # ===== Rate Limit =====
+                if (
+                    "429" in err
+                    or "RESOURCE_EXHAUSTED" in err
+                ):
+
+                    print(
+                        f"    └ ⚠ RateLimit発生 "
+                        f"[{model_name}] "
+                        f"10秒待機",
+                        flush=True
+                    )
+
+                    time.sleep(10)
+                    continue
+
+                print(
+                    f"    └ ❌ 試行 {attempt}/3 失敗 "
+                    f"({model_name}) : {e}",
+                    flush=True
+                )
+
                 time.sleep(3)
 
         if summary_text:
             break
 
+    # ==================================================
+    # 全モデル失敗
+    # ==================================================
+
     if not summary_text:
-        print(f"❌ [{part_title}] すべてのモデル・試行で生成に失敗（またはタイムアウト）しました。", flush=True)
-        return ""
+
+        summary_text = (
+            "⚠️ Gemini APIの混雑または障害により\n"
+            "本日の要約生成はスキップされました。\n\n"
+            "次回実行をお待ちください。"
+        )
+
+        fetch_discord_api(
+            f"channels/{target_ch_id}/messages",
+            method="POST",
+            payload={
+                "content": summary_text
+            }
+        )
+
+        print(
+            f"❌ [{part_title}] "
+            "すべてのモデルで生成失敗",
+            flush=True
+        )
+
+        return summary_text
+
+    # ==================================================
+    # フッター追加
+    # ==================================================
 
     if used_model and append_footer:
-        summary_text += f"\n\n*※ この要約は `{used_model}` で作成されました。*"
 
-    # Discordへ送信
-    chunks = safe_split_text(summary_text, max_length=1800)
+        summary_text += (
+            f"\n\n"
+            f"*※ この要約は "
+            f"`{used_model}` "
+            f"で作成されました。*"
+        )
+
+    # ==================================================
+    # Discord投稿
+    # ==================================================
+
+    chunks = safe_split_text(
+        summary_text,
+        max_length=1800
+    )
+
     for chunk in chunks:
-        fetch_discord_api(f"channels/{target_ch_id}/messages", method="POST", payload={"content": chunk})
+
+        result = fetch_discord_api(
+            f"channels/{target_ch_id}/messages",
+            method="POST",
+            payload={
+                "content": chunk
+            }
+        )
+
+        if not result:
+            print(
+                "⚠ Discord投稿失敗",
+                flush=True
+            )
+
         time.sleep(1)
 
     return summary_text
@@ -835,4 +982,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+
+    try:
+        main()
+
+    except Exception as e:
+
+        print(
+            f"致命的エラー : {e}",
+            flush=True
+        )
