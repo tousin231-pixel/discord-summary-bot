@@ -20,10 +20,10 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # タイムアウト設定 (接続, 読み込み)
 HTTP_TIMEOUT = (6.0, 20.0)
-GEMINI_TIMEOUT_SEC = 45
+GEMINI_TIMEOUT_SEC = 30
 
 # Gemini処理全体の制限時間
-GEMINI_TOTAL_TIMEOUT_SEC = 120
+GEMINI_TOTAL_TIMEOUT_SEC = 180
 
 # 共通ヘッダー
 DISCORD_HEADERS = {
@@ -509,6 +509,12 @@ def generate_and_post(
             )
             break
 
+        # ★追加：モデル名に応じて個別のタイムアウト時間を動的に変更
+        if "lite" in model_name:
+            current_timeout = 10  # ライト系は10秒でサクッと見切る
+        else:
+            current_timeout = 30  # 上位モデルは30秒しっかり待つ
+
         print(
             f"  └ [{part_title}] モデル試行中: {model_name}",
             flush=True
@@ -526,8 +532,9 @@ def generate_and_post(
                         model_name
                     )
 
+                    # ★変更：動的な timeout_sec を適用
                     response = future.result(
-                        timeout=timeout_sec
+                        timeout=current_timeout
                     )
 
                 elapsed = time.time() - start
