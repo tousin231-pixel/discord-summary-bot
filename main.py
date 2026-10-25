@@ -23,7 +23,7 @@ HTTP_TIMEOUT = (6.0, 20.0)
 GEMINI_TIMEOUT_SEC = 30
 
 # Gemini処理全体の制限時間
-GEMINI_TOTAL_TIMEOUT_SEC = 180
+GEMINI_TOTAL_TIMEOUT_SEC = 360
 
 # 共通ヘッダー
 DISCORD_HEADERS = {
@@ -509,33 +509,30 @@ def generate_and_post(
             )
             break
 
-        # ★追加：モデル名に応じて個別のタイムアウト時間を動的に変更
-        if "lite" in model_name:
-            current_timeout = 10  # ライト系は10秒でサクッと見切る
+       # ★モデルごとのタイムアウトとリトライ回数を最適化
+        if any(v in model_name for v in ["3.7", "3.8"]):
+            current_timeout = 20  # 3.8は20秒でレスポンスがなければ切る（通常は数秒〜15秒で返るため）
+            max_attempts = 2     # 2回試してダメなら速やかに3.7へ
+        elif "lite" in model_name:
+            current_timeout = 10  # lite系は10秒
+            max_attempts = 2
         else:
-            current_timeout = 30  # 上位モデルは30秒しっかり待つ
+            current_timeout = 25  # その他のflashモデル
+            max_attempts = 2
 
         print(
             f"  └ [{part_title}] モデル試行中: {model_name}",
             flush=True
         )
 
-        for attempt in range(1, 4):
+        for attempt in range(1, max_attempts + 1):
 
             try:
                 start = time.time()
 
                 with ThreadPoolExecutor(max_workers=1) as executor:
-
-                    future = executor.submit(
-                        call_gemini,
-                        model_name
-                    )
-
-                    # ★変更：動的な timeout_sec を適用
-                    response = future.result(
-                        timeout=current_timeout
-                    )
+                    future = executor.submit(call_gemini,model_name)
+                    response = future.result(timeout=current_timeout)
 
                 elapsed = time.time() - start
 
