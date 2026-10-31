@@ -1,11 +1,14 @@
 name: Daily Discord Summary
 
-on:
-  schedule:
+#on:
+#  schedule:
   # 毎日 日本時間：朝 4:23 （UTC 19:23）に自動実行
-    - cron: '03 20 * * *'
-  workflow_dispatch: # 手動実行ボタン
-  
+#    - cron: '03 20 * * *'
+#  workflow_dispatch: # 手動実行ボタン
+
+on:
+  # scheduleトリガーはGASから呼び出すため削除またはコメントアウト
+  workflow_dispatch: # 手動実行およびAPIからの外部トリガーを受け付ける
 
 jobs:
   summarize:
