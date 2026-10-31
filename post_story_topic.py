@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import random
 import re
@@ -5,6 +6,13 @@ import time
 from google import genai
 import requests
 import concurrent.futures
+
+# =========================================================
+# 時刻付きprintラッパー関数
+# =========================================================
+def print_with_time(*args, **kwargs):
+    now_str = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+    print(now_str, *args, **kwargs)
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -14,27 +22,26 @@ FORUM_CHANNEL_ID = "1419978214394167296"
 
 # 利用するモデルの優先順位リスト
 FALLBACK_MODELS = [
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite", 
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
     "gemini-3.7-flash",
     "gemini-3.8-flash",
-    "gemini-3.1-flash-lite", 
-    "gemini-3-flash",
 ]
 
 headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
 
 
 def get_target_forum_threads():
-    print("[1/4] フォーラムのタグ情報を取得中...", flush=True)
+    print_with_time("[1/4] フォーラムのタグ情報を取得中...", flush=True)
     forum_res = requests.get(
         f"https://discord.com/api/v10/channels/{FORUM_CHANNEL_ID}",
         headers=headers,
         timeout=10,
     )
     if forum_res.status_code != 200:
-        print(f"⚠️ フォーラム情報取得失敗: {forum_res.status_code}", flush=True)
+        print_with_time(f"⚠️ フォーラム情報取得失敗: {forum_res.status_code}", flush=True)
         return [], set(), {}
 
     forum_data = forum_res.json()
@@ -55,17 +62,17 @@ def get_target_forum_threads():
         if "ブルアカ" in t_name:
             ba_tag_ids.add(t_id)
 
-    print(f"  └ 全タグ一覧: {tag_id_to_name}", flush=True)
+    print_with_time(f"  └ 全タグ一覧: {tag_id_to_name}", flush=True)
 
     # 「ブルアカ」タグがフォーラム内に存在しない場合はエラー
     if not ba_tag_ids:
-        print("⚠️ 「ブルアカ」に関するタグが見つかりませんでした。", flush=True)
+        print_with_time("⚠️ 「ブルアカ」に関するタグが見つかりませんでした。", flush=True)
         return [], set(), {}
 
     guild_id = forum_data.get("guild_id")
     all_threads = []
 
-    print("[2/4] アクティブ＆アーカイブ済みスレッドを検索中...", flush=True)
+    print_with_time("[2/4] アクティブ＆アーカイブ済みスレッドを検索中...", flush=True)
 
     if guild_id:
         active_res = requests.get(
@@ -100,11 +107,10 @@ def get_target_forum_threads():
         applied_tags = set(th.get("applied_tags", []))
         
         # 必須条件: 「ブルアカ」タグが付いていること
-        # これにより、「ブルアカ単独」および「ブルアカ＋ストーリー」のみが抽出されます
         if applied_tags & ba_tag_ids:
             matched_threads.append(th)
 
-    print(f"  └ 条件にマッチしたスレッド数: {len(matched_threads)} 件", flush=True)
+    print_with_time(f"  └ 条件にマッチしたスレッド数: {len(matched_threads)} 件", flush=True)
     return matched_threads, story_tag_ids, tag_id_to_name
 
 
@@ -120,7 +126,6 @@ def get_thread_recent_messages(thread_id, limit=50):
     if res.status_code == 200:
         msgs = res.json()
         if msgs:
-            # Discord APIは新しい順で返ってくるため、時系列順（古い→新しい）に反転させる
             msgs.reverse()
             
             combined_text = []
@@ -136,9 +141,6 @@ def get_thread_recent_messages(thread_id, limit=50):
             return "\n".join(combined_text)
     return "（投稿内容が取得できませんでした）"
 
-
-import concurrent.futures
-# （中略）
 
 def call_gemini_with_timeout(client, model_name, prompt, timeout_sec=60):
     """
@@ -160,27 +162,26 @@ def generate_content_with_fallback(client, prompt):
     各モデルで最大3回チャレンジし、駄目なら次のモデルへ切り替えます。
     """
     for model_name in FALLBACK_MODELS:
-        print(f"🤖 モデル [{model_name}] で生成を試みます...", flush=True)
+        print_with_time(f"🤖 モデル [{model_name}] で生成を試みます...", flush=True)
         for attempt in range(1, 4):
             try:
-                # タイムアウト付きの関数を呼び出す（ここでは60秒に設定）
                 response = call_gemini_with_timeout(client, model_name, prompt, timeout_sec=60)
                 
                 if response and response.text:
-                    print(
+                    print_with_time(
                         f"  └  成功！ (モデル: {model_name}, 試行回数: {attempt}回目)",
                         flush=True,
                     )
                     return response.text
             except Exception as e:
-                print(
+                print_with_time(
                     f"  └ ⚠️ [{model_name}] 試行 {attempt}/3 失敗: {e}",
                     flush=True,
                 )
                 if attempt < 3:
-                    time.sleep(3)  # 3秒待ってリトライ
+                    time.sleep(3)
 
-        print(
+        print_with_time(
             f"🔄 [{model_name}] で3回失敗したため、次のモデルへ切り替えます...",
             flush=True,
         )
@@ -191,10 +192,9 @@ def generate_content_with_fallback(client, prompt):
 def main():
     threads, story_tag_ids, tag_id_to_name = get_target_forum_threads()
     if not threads:
-        print("⚠️ 該当するフォーラムスレッドが見つからなかったため終了します。", flush=True)
+        print_with_time("⚠️ 該当するフォーラムスレッドが見つからなかったため終了します。", flush=True)
         return
 
-    # ランダムに1つ選定
     selected_thread = random.choice(threads)
     thread_id = selected_thread["id"]
     thread_name = selected_thread.get("name", "無題のスレッド")
@@ -202,21 +202,19 @@ def main():
 
     is_story = bool(applied_tags & story_tag_ids)
 
-    print(
+    print_with_time(
         f"[3/4] ピックアップした話題: 「{thread_name}」 (ストーリー属性: {is_story})",
         flush=True,
     )
 
-    # ★ 1件取得（get_thread_first_message）から、最大50件を取得する関数に変更
     thread_messages = get_thread_recent_messages(thread_id, limit=50)
 
-    # ★ タグに応じた個別指示（ストーリーか通常話題かで分岐）
     if is_story:
         corner_title = "📖 **【アロプラチャンネル！ストーリー思い出発掘コーナー】**"
         topic_specific_rule = """・【話題タイプ】：ストーリー・シナリオ感想
 ・【ネタバレ方針】：ネタバレ全開OK！ストーリーの核心、黒幕や衝撃展開、名シーン、登場生徒の熱いセリフにしっかり踏み込んで語ってください。
 ・【会話展開の指針】：
-  - アロナ：話題を切り出し、「まさかあの展開になるとは思いませんでしたよね！」のように熱く盛り上がる。
+  - アロナ：話題を切り出し、「まさかあの展開になるとは思いましたよね！」のように熱く盛り上がる。
   - プラナ：作中の具体的展開や見どころ、伏線、生徒の活躍シーン（ネタバレ含む）を詳細に補足・深掘りする。
   - 締めくくり：「先生方はあのシーンの〜はどう思いましたか？」など具体的・核心的な場面を挙げてストーリー雑談を促す。"""
     else:
@@ -228,7 +226,6 @@ def main():
   - プラナ：そのスレッドの話題（ガチャ・攻略報告、生放送やDJライブ・スタンプラリー等の思い出など）を冷静に補足する。
   - 締めくくり：「先生方も当時の思い出や現地での思い出はどうでしたか？」と過去ログへの書き込み・雑談を促す。"""
 
-    # ★ 共通プロンプト（他のBotと統一した構造）
     prompt = f"""あなたは「ブルーアーカイブ」のアロナとプラナです。
 Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの先生（メンバー）に向けて、過去にフォーラムで盛り上がった話題を1つピックアップして紹介し、雑談のきっかけを作ってください。
 
@@ -261,8 +258,6 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 3. 【テンポと会話量（重要）】
    ・1回の発言は【最大60〜80文字程度】に抑え、長文にならないようコンパクトにまとめてください。
    ・ログの密度（話題の多さや熱量）に応じてターン数を調整してください。
-     - 情報量が少ない・画像メイン：3ターン程度（アロナ→プラナ→アロナ等）でサクッと案内
-     - 感想や討論で大盛り上がり：5〜8ターン程度かけ、具体的に語り合う
 
 ■ 絶対遵守事項（ファクトチェック）
 ・ログに書かれている事実や指定されたスレッド情報のみに基づいて会話を作成してください。
@@ -279,10 +274,9 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 **プラナ**: 「〜〜」
 """
     
-    print("[4/4] Gemini APIによる紹介文生成を開始します...", flush=True)
+    print_with_time("[4/4] Gemini APIによる紹介文生成を開始します...", flush=True)
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    # 3回挑戦＆モデル切り替え付き生成
     generated_text = generate_content_with_fallback(client, prompt)
 
     if generated_text:
@@ -293,11 +287,11 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
             timeout=10,
         )
         if res.status_code in [200, 201]:
-            print("🎉 正常に雑談チャンネルへ投稿完了しました！", flush=True)
+            print_with_time("🎉 正常に雑談チャンネルへ投稿完了しました！", flush=True)
         else:
-            print(f"⚠️ Discord投稿エラー: {res.status_code} - {res.text}", flush=True)
+            print_with_time(f"⚠️ Discord投稿エラー: {res.status_code} - {res.text}", flush=True)
     else:
-        print("❌ 全てのモデルとリトライで生成に失敗しました。", flush=True)
+        print_with_time("❌ 全てのモデルとリトライで生成に失敗しました。", flush=True)
 
 
 if __name__ == "__main__":
