@@ -68,6 +68,24 @@ GEMINI_MODELS = [
     "gemini-3-flash",
 ]
 
+# 従来の一括リストの代わりに、用途別のモデルリストを定義します
+
+# 1便目・3便目用（軽量モデル優先）
+LIGHT_GEMINI_MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3-flash",
+]
+
+# 2便目（会話要約）用（しっかりしたモデル優先）
+HEAVY_GEMINI_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+]
+
 # タイムゾーン定義
 JST = timezone(timedelta(hours=9))
 UTC = timezone.utc
@@ -482,12 +500,13 @@ def generate_and_post(
     part_title: str,
     append_footer: bool = True,
     timeout_sec: int = GEMINI_TIMEOUT_SEC,
+    models_list: list[str] = None, # 追加
 ) -> str:
+    if models_list is None:
+        models_list = GEMINI_MODELS
 
     summary_text = None
     used_model = None
-
-    # Gemini全体タイムアウト監視
     gemini_start = time.time()
 
     def call_gemini(model_name):
@@ -496,113 +515,57 @@ def generate_and_post(
             contents=prompt_text
         )
 
-    for model_name in GEMINI_MODELS:
-
-        # 全体タイムアウト
+    for model_name in models_list: # 個別リストでループ
         elapsed_total = time.time() - gemini_start
-
         if elapsed_total > GEMINI_TOTAL_TIMEOUT_SEC:
-            print(
-                f"❌ [{part_title}] Gemini処理全体タイムアウト "
-                f"({GEMINI_TOTAL_TIMEOUT_SEC}秒)",
-                flush=True
-            )
+            print(f"❌ [{part_title}] Gemini処理全体タイムアウト", flush=True)
             break
 
-       # ★モデルごとのタイムアウトとリトライ回数を最適化
-        if any(v in model_name for v in ["3.7", "3.8"]):
-            current_timeout = 20  # 3.8は20秒でレスポンスがなければ切る（通常は数秒〜15秒で返るため）
-            max_attempts = 2     # 2回試してダメなら速やかに3.7へ
-        elif "lite" in model_name:
-            current_timeout = 10  # lite系は10秒
+        # タイムアウトと試行回数の設定
+        if "lite" in model_name:
+            current_timeout = 10
             max_attempts = 2
         else:
-            current_timeout = 25  # その他のflashモデル
-            max_attempts = 2
+            current_timeout = 25
+            max_attempts = 2 # 必要に応じて3回にする場合はここを3にします
 
-        print(
-            f"  └ [{part_title}] モデル試行中: {model_name}",
-            flush=True
-        )
+        print(f"  └ [{part_title}] モデル試行中: {model_name}", flush=True)
 
         for attempt in range(1, max_attempts + 1):
-
             try:
                 start = time.time()
-
                 with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(call_gemini,model_name)
+                    future = executor.submit(call_gemini, model_name)
                     response = future.result(timeout=current_timeout)
 
                 elapsed = time.time() - start
-
-                print(
-                    f"    └ 成功 "
-                    f"({elapsed:.1f}秒) "
-                    f"[{model_name}]",
-                    flush=True
-                )
+                print(f"    └ 成功 ({elapsed:.1f}秒) [{model_name}]", flush=True)
 
                 summary_text = response.text
                 used_model = model_name
                 break
 
             except FutureTimeoutError:
-
-                print(
-                    f"    └ ⚠ タイムアウト "
-                    f"({timeout_sec}秒超過) "
-                    f"[{model_name}] "
-                    f"試行 {attempt}/3",
-                    flush=True
-                )
+                # 修正ポイント: 実際の max_attempts を表示に反映
+                print(f"    └ ⚠ タイムアウト ({current_timeout}秒超過) [{model_name}] 試行 {attempt}/{max_attempts}", flush=True)
 
             except Exception as e:
-
                 err = str(e)
-
-                # ===== 503系 =====
-                if (
-                    "503" in err
-                    or "UNAVAILABLE" in err
-                    or "high demand" in err
-                ):
-
-                    print(
-                        f"    └ ⚠ Gemini混雑検知 "
-                        f"[{model_name}] "
-                        f"→ 次モデルへ切替",
-                        flush=True
-                    )
-
+                if "503" in err or "UNAVAILABLE" in err or "high demand" in err:
+                    print(f"    └ ⚠ Gemini混雑検知 [{model_name}] → 次モデルへ切替", flush=True)
                     break
-
-                # ===== Rate Limit =====
-                if (
-                    "429" in err
-                    or "RESOURCE_EXHAUSTED" in err
-                ):
-
-                    print(
-                        f"    └ ⚠ RateLimit発生 "
-                        f"[{model_name}] "
-                        f"10秒待機",
-                        flush=True
-                    )
-
+                if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                    print(f"    └ ⚠ RateLimit発生 [{model_name}] 10秒待機", flush=True)
                     time.sleep(10)
                     continue
 
-                print(
-                    f"    └ ❌ 試行 {attempt}/3 失敗 "
-                    f"({model_name}) : {e}",
-                    flush=True
-                )
-
+                print(f"    └ ❌ 試行 {attempt}/{max_attempts} 失敗 ({model_name}) : {e}", flush=True)
                 time.sleep(3)
 
         if summary_text:
             break
+
+    # (以降のフッター追加やDiscord投稿処理はそのまま)
 
     # ==================================================
     # 全モデル失敗
@@ -768,7 +731,7 @@ def process_reminders(client: genai.Client, info_summary_text: str, logs_body: s
             prompt_remind,
             target_ch,
             f"リマインド({category_label}-{remind_type})",
-            append_footer=False,
+            models_list=LIGHT_GEMINI_MODELS, # 3便目は軽量モデルを指定
         )
 
 
@@ -974,9 +937,16 @@ def main():
 """
 
     # 1便目・2便目の生成と送信
-    info_res = generate_and_post(client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ")
+    # 1便目（お知らせ：軽量モデル優先）
+    info_res = generate_and_post(
+        client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=LIGHT_GEMINI_MODELS
+    )
     time.sleep(2)
-    generate_and_post(client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約")
+    
+    # 2便目（会話要約：しっかりしたモデル優先）
+    generate_and_post(
+        client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS
+    )
 
     # リマインドチェック
     print("[6/6] イベントリマインド判定処理を開始...", flush=True)
