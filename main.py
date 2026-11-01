@@ -1,4 +1,5 @@
 import csv
+import builtins
 from datetime import datetime, timedelta, timezone
 import os
 import re
@@ -9,6 +10,16 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from bs4 import BeautifulSoup
 from google import genai
 import requests
+
+# =========================================================
+# 0. printラッパー関数（現在時刻の自動挿入）
+# =========================================================
+
+def print(*args, **kwargs):
+    """printと同じ引数を受け取り、先頭に現在時刻(JST)を挿入して出力するラッパー関数"""
+    now_str = datetime.now(timezone(timedelta(hours=9))).strftime("[%H:%M:%S]")
+    builtins.print(now_str, *args, **kwargs)
+
 
 # =========================================================
 # 1. 設定 & 定数管理
@@ -56,19 +67,6 @@ CHANNELS = {
         "1379072804988784780": "任務・イベント・その他",
     },
 }
-
-# 試行するGeminiモデルリスト例
-#GEMINI_MODELS = [
-#    "gemini-3.8-flash",
-#   "gemini-3.7-flash",
-#    "gemini-3.6-flash",
-#    "gemini-3.5-flash",
-#    "gemini-3.5-flash-lite",
-#    "gemini-3.1-flash-lite",
-#    "gemini-3-flash",
-#]
-
-# 従来の一括リストの代わりに、用途別のモデルリストを定義します
 
 # 1便目・3便目用（軽量モデル優先）
 LIGHT_GEMINI_MODELS = [
@@ -332,15 +330,10 @@ def fetch_guild_events(guild_id: str, now_utc: datetime):
         if (status == 2) or (status == 1 and event_date_jst == today_jst):
             name = ev.get("name")
             event_id = ev.get("id")
-            channel_id = ev.get("channel_id") # VC等の開催チャンネルIDがある場合
+            channel_id = ev.get("channel_id")
 
-            # イベント直接URLを生成
             event_url = f"https://discord.com/events/{guild_id}/{event_id}"
-            
-            # チャンネルIDがある場合はチャンネルメンションも追加可能
             ch_mention = f" (<#{channel_id}>)" if channel_id else ""
-
-            # 👈 や 🔗 などの絵文字を添えて導線を強調
             event_summary.append(f"・{name} (開始: {time_str} JST){ch_mention}\n    👉 イベント詳細・参加はこちら: {event_url}")
 
     return "\n".join(event_summary) if event_summary else "本日開催予定のサーバーイベントはありません。"
@@ -399,7 +392,6 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
     """通常チャンネルおよびフォーラムの過去24時間メッセージを収集"""
     collected_data = {}
 
-    # 1. 通常チャンネル
     for cat_name, channels in CHANNELS.items():
         collected_data[cat_name] = {}
         for ch_id, ch_name in channels.items():
@@ -431,13 +423,12 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
             if ch_msgs:
                 collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
 
-    # 2. フォーラムスレッド
     collected_data["フォーラム"] = {}
     if guild_id:
         threads_data = fetch_discord_api(f"guilds/{guild_id}/threads/active")
         if threads_data:
             threads = threads_data.get("threads", [])
-            target_threads = [th for th in threads if th.get("parent_id") == FORUM_CHANNEL_ID]
+            target_threads = [th for th in threads if th.get("parent_id"] == FORUM_CHANNEL_ID]
 
             for th in target_threads:
                 th_id = th["id"]
@@ -473,7 +464,6 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
                         prefix = "🆕 " if is_new_thread else ""
                         collected_data["フォーラム"][f"{prefix}<#{th_id}> ({th_name})"] = th_msgs
 
-    # フォーマット整形
     logs_body = ""
     for cat_name, channels in collected_data.items():
         if channels:
@@ -501,7 +491,7 @@ def generate_and_post(
     part_title: str,
     append_footer: bool = True,
     timeout_sec: int = GEMINI_TIMEOUT_SEC,
-    models_list: list[str] = None, # 追加
+    models_list: list[str] = None,
 ) -> str:
     if models_list is None:
         models_list = GEMINI_MODELS
@@ -516,19 +506,18 @@ def generate_and_post(
             contents=prompt_text
         )
 
-    for model_name in models_list: # 個別リストでループ
+    for model_name in models_list:
         elapsed_total = time.time() - gemini_start
         if elapsed_total > GEMINI_TOTAL_TIMEOUT_SEC:
             print(f"❌ [{part_title}] Gemini処理全体タイムアウト", flush=True)
             break
 
-        # タイムアウトと試行回数の設定
         if "lite" in model_name:
             current_timeout = 10
             max_attempts = 2
         else:
             current_timeout = 25
-            max_attempts = 2 # 必要に応じて3回にする場合はここを3にします
+            max_attempts = 2
 
         print(f"  └ [{part_title}] モデル試行中: {model_name}", flush=True)
 
@@ -547,7 +536,6 @@ def generate_and_post(
                 break
 
             except FutureTimeoutError:
-                # 修正ポイント: 実際の max_attempts を表示に反映
                 print(f"    └ ⚠ タイムアウト ({current_timeout}秒超過) [{model_name}] 試行 {attempt}/{max_attempts}", flush=True)
 
             except Exception as e:
@@ -566,14 +554,7 @@ def generate_and_post(
         if summary_text:
             break
 
-    # (以降のフッター追加やDiscord投稿処理はそのまま)
-
-    # ==================================================
-    # 全モデル失敗
-    # ==================================================
-
     if not summary_text:
-
         summary_text = (
             "⚠️ Gemini APIの混雑または障害により\n"
             "本日の要約生成はスキップされました。\n\n"
@@ -596,12 +577,7 @@ def generate_and_post(
 
         return summary_text
 
-    # ==================================================
-    # フッター追加
-    # ==================================================
-
     if used_model and append_footer:
-
         summary_text += (
             f"\n\n"
             f"*※ この要約は "
@@ -609,17 +585,12 @@ def generate_and_post(
             f"で作成されました。*"
         )
 
-    # ==================================================
-    # Discord投稿
-    # ==================================================
-
     chunks = safe_split_text(
         summary_text,
         max_length=1800
     )
 
     for chunk in chunks:
-
         result = fetch_discord_api(
             f"channels/{target_ch_id}/messages",
             method="POST",
@@ -732,12 +703,11 @@ def process_reminders(client: genai.Client, info_summary_text: str, logs_body: s
             prompt_remind,
             target_ch,
             f"リマインド({category_label}-{remind_type})",
-            models_list=LIGHT_GEMINI_MODELS, # 3便目は軽量モデルを指定
+            models_list=LIGHT_GEMINI_MODELS,
         )
 
 
 def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: bool) -> str:
-    """リマインド用プロンプトの構築"""
     ch_label = "バトル系専用チャンネル" if is_battle else "ブルアカ雑談チャンネル"
     
     specific_instruction = ""
@@ -747,18 +717,16 @@ def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: b
    ・「最終日前日」の場合：明日午前4:00の終了（チケット消失）を強く注意喚起し、スコア詰めや最終確認を促してください。
 
 2. 【会話ログの反映】
-   ・会話ログ内に【対象コンテンツ】に関する話題（ボス名、スコア、編成、TL、苦戦している様子など）がある場合：
-     「先生方は〇〇のTL（タイムライン）で工夫されているようですね」「難易度〇〇に苦戦されている先生もお見かけしました」のように具体的に触れてください。
-   ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・アドバイスに留めてください。"""
+   ・会話ログ内に【対象コンテンツ】に関する話題がある場合：具体的に触れてください。
+   ・会話ログに該当する話題が無い場合：一般的な応援・アドバイスに留めてください。"""
     else:
         specific_instruction = """1. 【タイミング別メッセージ】
    ・「折り返し」の場合：イベントストーリーの読了状況や、ショップ交換・アイテム収集の進捗に触れる展開にしてください。
-   ・「最終日前日」の場合：イベント終了日時（AP消化、やり残しチェック、報酬受取など）を強く注意喚起してください。
+   ・「最終日前日」の場合：イベント終了日時を強く注意喚起してください。
 
 2. 【会話ログの反映】
-   ・会話ログ内に【対象イベント】に関する話題（ストーリー感想、チャレンジステージ、ガチャ・ピックアップ、ショップのオーパーツなど）がある場合：
-     「先生方は〇〇のストーリーやチャレンジで盛り上がっていましたね！」「〇〇の交換を済ませた先生もいらっしゃるみたいです」のように具体的に触れてください。
-   ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・呼びかけに留めてください。"""
+   ・会話ログ内に【対象イベント】に関する話題がある場合：具体的に触れてください。
+   ・会話ログに該当する話題が無い場合：一般的な応援・呼びかけに留めてください。"""
 
     return f"""
 あなたは「ブルーアーカイブ」のアロナとプラナです。
@@ -780,26 +748,13 @@ Discordサーバー「足跡の化石」の{ch_label}の先生（メンバー）
 {specific_instruction}
 
 3. 【テンポと会話量（重要）】
-   ・1回の発言は【最大60〜80文字程度】に抑え、長文にならないようコンパクトにまとめてください。
-   ・ログの熱量や話題の量に応じて、掛け合いのターン数を調整してください。
-     - 話題が少ない日：3〜4ターン（往復）程度
-     - 話題で大盛り上がりの日：5〜8ターン（往復）程度
-
-■ 話題の判定ルール（時間・返信機能）
-・ログには `[HH:MM]` の投稿時刻と、返信機能が使われた場合の `(↩️ 〇〇の「...」への返信)` が含まれます。
-・時間が離れていても `(↩️ ...への返信)` がある場合は、同一の話題（継続）として扱ってください。
-・返信機能がなく数時間以上空いている場合は、独立した新しい話題として判断してください。
+   ・1回の発言は【最大60〜80文字程度】に抑え、コンパクトにまとめてください。
 
 ■ 絶対遵守事項（ファクトチェック）
 1. 提供された入力データ（概要・ログ）にある事実のみに基づいて出力してください。
-2. 入力データ内に「メンテナンス実施」の明確な記載がない限り、絶対に「メンテナンス」という言葉や注意喚起を含めないでください。
-3. イベントの種別を勝手に変更・混同しないでください。
+2. 「メンテナンス実施」の明確な記載がない限り、絶対に「メンテナンス」という言葉を含めないでください。
 
 ■ 出力フォーマット
-以下の形式で会話を出力してください。
-
-**アロナ**: 「〜〜」
-**プラナ**: 「〜〜」
 **アロナ**: 「〜〜」
 **プラナ**: 「〜〜」
 """
@@ -818,13 +773,11 @@ def main():
     now_utc = datetime.now(UTC)
     yesterday_utc = now_utc - timedelta(days=1)
 
-    # ギルドIDの取得
     guild_id = None
     ch_info = fetch_discord_api(f"channels/{TARGET_CHANNEL_ID}")
     if ch_info:
         guild_id = ch_info.get("guild_id")
 
-    # データ収集
     print("[2/6] Wikiイベント情報＆誕生日情報を取得中...", flush=True)
     game_event_text, parsed_events_list = get_bluearchive_game_events()
     today_student_birthday = get_today_bluearchive_birthdays()
@@ -840,7 +793,6 @@ def main():
     print("[5/6] Gemini APIによる要約を作成・投稿中...", flush=True)
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    # プロンプト作成 (お知らせ編)
     prompt_info = f"""
 あなたはDiscordサーバー「足跡の化石」の広報Botです。
 以下の【入力データ】を元に、ゲーム・サーバーの連絡事項をまとめた【お知らせ編】を作成してください。
@@ -854,102 +806,25 @@ def main():
 ■ キャラクター設定とトーン
 ・ブルーアーカイブの「アロナ」として、元気で健気な言葉遣いを徹底してください。
 ・冒頭は朝の挨拶から始めてください。
-・メッセージの最後は、お知らせ編を終えて次の「会話要約編」の投稿を楽しみに行きたくなるような、一言添えた締めくくりにしてください。（
-
-■ 出力・表示分岐ルール
-1. 【誕生日・サーバーイベント・投票情報の表示判定】
-   ・3つ全てにおいて該当情報が一切ない場合：🎉 **本日の誕生日・サーバーイベント・新着投票はありません！**
-   ・1つでも該当情報がある場合：該当する項目の見出しのみを立てて詳細を記載。
-2. 【ゲーム情報の表示判定】
-   ・該当する情報が無い場合は、見出しごと省略してください。
-3. 【階層・インデントのルール】
-   ・同カテゴリ内に複数の情報がある場合は、インデント（スペース2つ＋`- `）を入れてぶら下げてください。
-
-■ 出力フォーマット
-📢 **足跡の化石 デイリーサマリー（お知らせ・ゲーム情報編）**
-
-（アロナからの朝の挨拶）
-
-🎂 **本日の誕生日**
-（情報がある場合のみ記載）
-
-📅 **本日のサーバーイベント**
-（情報がある場合のみ、JST時間およびイベントURL・リンクを添えて記載）
-
-📊 **投票置き場のお知らせ**
-（情報がある場合のみ記載）
-- 現在進行中の投票テーマとURL・メッセージリンク
-- 💬 **メンバーの反応**: （メンバーからのコメントや議論の様子を要約）
-
-💙 **ブルーアーカイブ 最新ゲーム情報**
-（情報がある場合のみカテゴリ形式で記載）
-
-（ゲーム情報の振り返り ＋ 次の『会話要約編』へつなぐ切り替えの挨拶）
 """
 
-    # プロンプト作成 (会話要約編)
     prompt_chat = f"""
 あなたはDiscordサーバー「足跡の化石」の広報Botです。
 以下の【会話ログ】を元に、昨日のサーバーメンバーの盛り上がりをまとめた【会話要約編】を作成してください。
-
-■ コミュニティ前提ルール（厳格適用）
-・ネタバレOK・歓迎のサーバーです。
-・ゲーム内用語、ボス名、キャラ名は【会話ログに実際に存在する表記】のみを使用してください。
-・カッコ書き補足（例：〇〇（△△））は、同一ログ内に公称と俗称の両方が実際に書き込まれている場合のみ許可します。
-
-■ キャラクター設定とトーン
-・ブルーアーカイブの「アロナ」として、元気で健気な言葉遣いを徹底してください。
-・直前にゲーム情報の振り返り ＋ 次の『会話要約編』へつなぐ切り替えの挨拶が投稿されています。なので冒頭の挨拶は不要です。
-・最後に、昨日一日を振り返るアロナからの感想＆朝の締めくくりのメッセージを添えてください。
-
-■ 出力・フォーマットルール
-・同じチャンネル（<#ID>）を要約内で2度以上登場させないでください。
-・新スレッド（ログ内で 🆕 マーク付）は頭に 🆕 を付けて出力してください。
-・最後に、アロナからの締めくくりの感想＆先生への労いメッセージを添えてください。
-
-■ 話題の判定・抽出ルール
-1. 話題のグループ化（関連性の判定）
-返信マークの優先: 時間が離れていても (↩️ 〇〇の「...」への返信) が含まれる投稿は、参照元の投稿と同じ話題（連続したやり取り）として扱ってください。
-時間の近さによる判定: 返信マークがない場合でも、投稿時刻 [HH:MM] が近く、文脈上受け答えが成り立っている投稿同士は同一の話題として扱ってください。
-話題の切断: 返信マークがなく、前の投稿から数時間以上空いており、文脈上受け答えが成り立っていない場合は、独立した新しい話題として判断してください。
-2. 単発投稿の除外（要約対象の絞り込み）
-除外対象: 上記の基準でグループ化した結果、他のユーザーからの返信・受け答え・連続した対話が発生せず、1人だけの独立した投稿で終わっている話題は除外してください。
-要約対象: 複数人による実質的なやり取りや対話が成り立っている話題のみを要約してください。
-
-【出力フォーマット】
-💬 **足跡の化石 デイリーサマリー（みんなの会話要約編）**
-
-☕ **カテゴリ：シャーレ談話室**
-- <#1376909055091671071>
-  - 【会話ログ】に基づいた話題1
-
-⚔️ **カテゴリ：争いの足跡**
-- <#1379058754716307516>
-  - 【会話ログ】に基づいた話題1
-
-💬 **カテゴリ：フォーラム**
-- <#スレッドID>
-  - 【会話ログ】に基づいた話題1
----
-（アロナからの締めくくりの挨拶）
 
 【会話ログ】
 {logs_body}
 """
 
-    # 1便目・2便目の生成と送信
-    # 1便目（お知らせ：軽量モデル優先）
     info_res = generate_and_post(
         client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=LIGHT_GEMINI_MODELS
     )
     time.sleep(2)
     
-    # 2便目（会話要約：しっかりしたモデル優先）
     generate_and_post(
         client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS
     )
 
-    # リマインドチェック
     print("[6/6] イベントリマインド判定処理を開始...", flush=True)
     process_reminders(client, info_res, logs_body, parsed_events_list)
 
@@ -957,12 +832,9 @@ def main():
 
 
 if __name__ == "__main__":
-
     try:
         main()
-
     except Exception as e:
-
         print(
             f"致命的エラー : {e}",
             flush=True
