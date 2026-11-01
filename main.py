@@ -428,7 +428,7 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
         threads_data = fetch_discord_api(f"guilds/{guild_id}/threads/active")
         if threads_data:
             threads = threads_data.get("threads", [])
-            target_threads = [th for th in threads if th.get("parent_id"] == FORUM_CHANNEL_ID]
+            target_threads = [th for th in threads if th.get("parent_id") == FORUM_CHANNEL_ID]
 
             for th in target_threads:
                 th_id = th["id"]
