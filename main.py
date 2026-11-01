@@ -513,10 +513,10 @@ def generate_and_post(
             break
 
         if "lite" in model_name:
-            current_timeout = 10
+            current_timeout = GEMINI_TIMEOUT_SEC
             max_attempts = 2
         else:
-            current_timeout = 25
+            current_timeout = GEMINI_TIMEOUT_SEC
             max_attempts = 2
 
         print(f"  └ [{part_title}] モデル試行中: {model_name}", flush=True)
