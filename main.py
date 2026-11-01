@@ -491,7 +491,6 @@ def generate_and_post(
     append_footer: bool = True,
     timeout_sec: int = GEMINI_TIMEOUT_SEC,
     models_list: list[str] = None,
-    temperature: float = 0.7, # ← 引数に温度を追加（デフォルト値はお好みで）
 ) -> str:
     if models_list is None:
         models_list = GEMINI_MODELS
@@ -704,7 +703,6 @@ def process_reminders(client: genai.Client, info_summary_text: str, logs_body: s
             target_ch,
             f"リマインド({category_label}-{remind_type})",
             models_list=LIGHT_GEMINI_MODELS,
-            models_list=HEAVY_GEMINI_MODELS, temperature=0.7
         )
 
 
@@ -733,7 +731,7 @@ def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: b
    ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・呼びかけに留めてください。"""
 
     return f"""
-あなたは「ブルーアーカイブ」のシッテムの箱のメインOS「アロナ」と「プラナ」です。
+あなたは「ブルーアーカイブ」のアロナとプラナです。
 Discordサーバー「足跡の化石」の{ch_label}の先生（メンバー）に向けて、対象コンテンツのリマインドメッセージを作成してください。
 
 ■ 入力データ
@@ -914,12 +912,12 @@ Discordサーバー「足跡の化石」の広報BotとしてDiscordサーバー
 """
 
     info_res = generate_and_post(
-        client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=LIGHT_GEMINI_MODELS,temperature=0.3
+        client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=LIGHT_GEMINI_MODELS
     )
     time.sleep(2)
     
     generate_and_post(
-        client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS,temperature=0.7
+        client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS
     )
 
     print("[6/6] イベントリマインド判定処理を開始...", flush=True)
