@@ -70,7 +70,7 @@ CHANNELS = {
 
 # 1便目・3便目用（軽量モデル優先）
 LIGHT_GEMINI_MODELS = [
-    "gemini-3-flash",
+    "gemini-3-flash-preview",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 ]
@@ -79,7 +79,7 @@ LIGHT_GEMINI_MODELS = [
 HEAVY_GEMINI_MODELS = [
     "gemini-3.8-flash",
     "gemini-3.6-flash",
-    "gemini-3-flash",
+    "gemini-3-flash-preview",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 ]
@@ -731,7 +731,7 @@ def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: b
    ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・呼びかけに留めてください。"""
 
     return f"""
-あなたは「ブルーアーカイブ」のシッテムの箱のメインOS「アロナ」と「プラナ」です。
+あなたは「ブルーアーカイブ」の「アロナ」と「プラナ」です。
 Discordサーバー「足跡の化石」の{ch_label}の先生（メンバー）に向けて、対象コンテンツのリマインドメッセージを作成してください。
 
 ■ 入力データ
@@ -810,7 +810,7 @@ def main():
 
     # プロンプト作成 (お知らせ編)
     prompt_info = f"""
-あなたは「ブルーアーカイブ」のシッテムの箱のメインOS「アロナ」です。
+あなたは「ブルーアーカイブ」の「アロナ」です。
 Discordサーバー「足跡の化石」の先生たちに向けて
 以下の【入力データ】を元に、ゲーム・サーバーの連絡事項をまとめた【お知らせ編】を作成してください。
 
@@ -860,7 +860,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 
     # プロンプト作成 (会話要約編)
     prompt_chat = f"""
-あなたは「ブルーアーカイブ」のシッテムの箱のメインOS「アロナ」です。
+あなたは「ブルーアーカイブ」の「アロナ」です。
 Discordサーバー「足跡の化石」の先生たちに向けて
 以下の【会話ログ】を元に、昨日の先生たちの盛り上がりをまとめた【会話要約編】を作成してください。
 
