@@ -275,12 +275,6 @@ def get_today_bluearchive_birthdays(csv_path="birthday.csv"):
     now_jst = get_now_jst()
     target_bday_str = f"{now_jst.month}/{now_jst.day}"
     print(f"[2/6] 誕生日データの確認中... (対象日付: '{target_bday_str}')", flush=True)
-
-    # ── 今日の日付と曜日も取得しておく ──
-    now_jst = get_now_jst()
-    weekday_str = ["月", "火", "水", "木", "金", "土", "日"][now_jst.weekday()]
-    date_context = f"{now_jst.year}年{now_jst.month}月{now_jst.day}日（{weekday_str}曜日）"
-    
     birthday_students = []
     try:
         with open(csv_path, mode="r", encoding="utf-8") as f:
@@ -799,6 +793,11 @@ def main():
         guild_id = ch_info.get("guild_id")
 
     print("[2/6] Wikiイベント情報＆誕生日情報を取得中...", flush=True)
+     # ── 今日の日付と曜日も取得しておく ──
+    now_jst = get_now_jst()
+    weekday_str = ["月", "火", "水", "木", "金", "土", "日"][now_jst.weekday()]
+    date_context = f"{now_jst.year}年{now_jst.month}月{now_jst.day}日（{weekday_str}曜日）"
+    
     game_event_text, parsed_events_list = get_bluearchive_game_events()
     today_student_birthday = get_today_bluearchive_birthdays()
     birthday_info_text = f"本日お誕生日の生徒: {today_student_birthday}ちゃん" if today_student_birthday else "本日お誕生日の生徒はいません。"
