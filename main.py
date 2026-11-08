@@ -917,7 +917,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 【会話ログ】
 {logs_body}
 """
-
+    print(len(prompt_info), len(prompt_chat))
     info_res = generate_and_post(
         client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=LIGHT_GEMINI_MODELS
     )
