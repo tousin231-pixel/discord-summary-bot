@@ -274,7 +274,7 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 **アロナ**: 「〜〜」
 **プラナ**: 「〜〜」
 """
-    
+    print(len(prompt))
     print("[4/4] Gemini APIによる紹介文生成を開始します...", flush=True)
     client = genai.Client(api_key=GEMINI_API_KEY)
 
