@@ -11,15 +11,6 @@ from bs4 import BeautifulSoup
 from google import genai
 import requests
 
-# =========================================================
-# 0. printラッパー関数（現在時刻の自動挿入）
-# =========================================================
-
-def print(*args, **kwargs):
-    """printと同じ引数を受け取り、先頭に現在時刻(JST)を挿入して出力するラッパー関数"""
-    now_str = datetime.now(timezone(timedelta(hours=9))).strftime("[%H:%M:%S]")
-    builtins.print(now_str, *args, **kwargs)
-
 
 # =========================================================
 # 1. 設定 & 定数管理
@@ -94,6 +85,11 @@ JST = timezone(timedelta(hours=9))
 def get_now_jst():
     """現在時刻 (JST) を取得"""
     return datetime.now(JST)
+
+def print(*args, **kwargs):
+    """printと同じ引数を受け取り、先頭に現在時刻(JST)を挿入して出力するラッパー関数"""
+    builtins.print(get_now_jst().strftime("[%H:%M:%S]"), end=' ')
+    builtins.print(*args, **kwargs)
 
 def fetch_discord_api(endpoint: str, method: str = "GET", payload: dict = None):
     """Discord API呼び出しの共通化"""
@@ -270,8 +266,7 @@ def get_bluearchive_game_events():
 
 def get_today_bluearchive_birthdays(csv_path="birthday.csv"):
     """CSVから本日誕生日の生徒を取得"""
-    now_jst = get_now_jst()
-    target_bday_str = f"{now_jst.month}/{now_jst.day}"
+    target_bday_str = get_now_jst().strftime('%-m/%-d')
     print(f"[2/6] 誕生日データの確認中... (対象日付: '{target_bday_str}')", flush=True)
     birthday_students = []
     try:
@@ -793,8 +788,8 @@ def main():
     print("[2/6] Wikiイベント情報＆誕生日情報を取得中...", flush=True)
      # ── 今日の日付と曜日も取得しておく ──
     now_jst = get_now_jst()
-    weekday_str = ["月", "火", "水", "木", "金", "土", "日"][now_jst.weekday()]
-    date_context = f"{now_jst.year}年{now_jst.month}月{now_jst.day}日（{weekday_str}曜日）"
+    weekday_str = "月火水木金土日"[now_jst.weekday()]
+    date_context = f"{now_jst.strftime('%Y年%-m月%-d日')}（{weekday_str}曜日）"
     
     game_event_text, parsed_events_list = get_bluearchive_game_events()
     today_student_birthday = get_today_bluearchive_birthdays()
