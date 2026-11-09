@@ -315,7 +315,7 @@ def fetch_guild_events(guild_id: str, now_utc: datetime):
         start_iso = ev.get("scheduled_start_time")
 
         if start_iso:
-            utc_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+            utc_dt = datetime.fromisoformat(start_iso)
             jst_dt = utc_dt.astimezone(JST)
             time_str = jst_dt.strftime("%H:%M")
             event_date_jst = jst_dt.date()
@@ -346,7 +346,7 @@ def fetch_polls(guild_id: str, yesterday_utc: datetime):
     poll_authors = {}
 
     for msg in messages:
-        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+        msg_time = datetime.fromisoformat(msg["timestamp"])
         if "poll" in msg:
             poll_data = msg["poll"]
             is_finalized = poll_data.get("results", {}).get("is_finalized", False)
@@ -362,7 +362,7 @@ def fetch_polls(guild_id: str, yesterday_utc: datetime):
                 poll_summary.append(f"・{status_label}「{question}」\n    👉 投票はこちら: {msg_link}")
 
     for msg in messages:
-        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+        msg_time = datetime.fromisoformat(msg["timestamp"])
         if msg_time >= yesterday_utc and not msg.get("author", {}).get("bot", False) and "poll" not in msg:
             author = msg.get("author", {}).get("username", "Unknown")
             author_id = msg.get("author", {}).get("id")
@@ -397,7 +397,7 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
 
             ch_msgs = []
             for msg in reversed(messages):
-                msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+                msg_time = datetime.fromisoformat(msg["timestamp"])
                 if msg_time >= yesterday_utc and not msg.get("author", {}).get("bot", False):
                     author = msg.get("author", {}).get("username", "Unknown")
                     content = msg.get("content", "")
@@ -433,13 +433,13 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
                 create_ts_raw = th.get("create_timestamp")
 
                 if create_ts_raw:
-                    created_at = datetime.fromisoformat(create_ts_raw.replace("Z", "+00:00"))
+                    created_at = datetime.fromisoformat(create_ts_raw)
                     if created_at >= yesterday_utc:
                         is_new_thread = True
                 else:
                     try:
                         snowflake_time = ((int(th_id) >> 22) + 1420070400000) / 1000.0
-                        created_at = datetime.fromtimestamp(snowflake_time, tz=timezone.utc)
+                        created_at = datetime.fromtimestamp(snowflake_time, tz=UTC)
                         if created_at >= yesterday_utc:
                             is_new_thread = True
                     except Exception:
@@ -449,7 +449,7 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
                 if msg_data:
                     th_msgs = []
                     for msg in reversed(msg_data):
-                        msg_time = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+                        msg_time = datetime.fromisoformat(msg["timestamp"])
                         if msg_time >= yesterday_utc and not msg.get("author", {}).get("bot", False):
                             author = msg.get("author", {}).get("username", "Unknown")
                             content = msg.get("content", "")
