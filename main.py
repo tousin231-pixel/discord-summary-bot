@@ -1,6 +1,6 @@
 import csv
 import builtins
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 import os
 import re
 import time
@@ -86,8 +86,6 @@ HEAVY_GEMINI_MODELS = [
 
 # タイムゾーン定義
 JST = timezone(timedelta(hours=9))
-UTC = timezone.utc
-
 
 # =========================================================
 # 2. 汎用ヘルパー関数
