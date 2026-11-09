@@ -16,7 +16,6 @@ FORUM_CHANNEL_ID = "1419978214394167296"
 FALLBACK_MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite", 
-    "gemini-3-flash-preview",
 ]
 
 headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
