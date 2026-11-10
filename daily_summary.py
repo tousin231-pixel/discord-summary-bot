@@ -59,6 +59,10 @@ CHANNELS = {
     },
 }
 
+# 利用できるモデルは以下を参照
+# https://aistudio.google.com/docs/models
+# https://aistudio.google.com/docs/pricing
+
 # 1便目・3便目用（軽量モデル優先）
 LIGHT_GEMINI_MODELS = [
     "gemini-3.5-flash-lite",
