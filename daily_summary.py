@@ -500,50 +500,60 @@ def generate_and_post(
             contents=prompt_text
         )
 
-    # リストの先頭（最優先モデル）を固定で使用する
-    model_name = models_list[0]
-    elapsed_total = time.time() - gemini_start
-    
-    if elapsed_total > GEMINI_TOTAL_TIMEOUT_SEC:
-        print(f"❌ [{part_title}] Gemini処理全体タイムアウト", flush=True)
-        return "⚠️ タイムアウトによりスキップされました。"
-
-    # 503エラー対策のリトライ設定（最大3回リトライ、5秒待機）
-    max_retries = 3
+    # 503エラー対策のリトライ設定（1モデルあたりの最大リトライ回数と待機秒数）
+    max_retries_per_model = 3
     retry_wait_sec = 5
 
-    print(f"  └ [{part_title}] 使用モデル: {model_name}", flush=True)
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            start = time.time()
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(call_gemini, model_name)
-                response = future.result(timeout=timeout_sec)
-
-            elapsed = time.time() - start
-            print(f"    └ 成功 ({elapsed:.1f}秒) [{model_name}]", flush=True)
-
-            summary_text = response.text
-            used_model = model_name
+    # リスト内のモデルを順番にループ（フォールバック）
+    for model_name in models_list:
+        elapsed_total = time.time() - gemini_start
+        if elapsed_total > GEMINI_TOTAL_TIMEOUT_SEC:
+            print(f"❌ [{part_title}] Gemini処理全体タイムアウト", flush=True)
             break
 
-        except FutureTimeoutError:
-            print(f"    └ ⚠ タイムアウト ({timeout_sec}秒超過) [{model_name}] 試行 {attempt}/{max_retries}", flush=True)
+        print(f"  └ [{part_title}] モデル試行中: {model_name}", flush=True)
 
-        except Exception as e:
-            err = str(e)
-            if "503" in err or "UNAVAILABLE" in err or "high demand" in err:
-                print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → {retry_wait_sec}秒後にリトライ ({attempt}/{max_retries})", flush=True)
-                time.sleep(retry_wait_sec)
-                continue
-            if "429" in err or "RESOURCE_EXHAUSTED" in err:
-                print(f"    └ ⚠ RateLimit発生 [{model_name}] 10秒待機", flush=True)
-                time.sleep(10)
-                continue
+        # 同一モデルでのリトライループ
+        model_success = False
+        for attempt in range(1, max_retries_per_model + 1):
+            try:
+                start = time.time()
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(call_gemini, model_name)
+                    response = future.result(timeout=timeout_sec)
 
-            print(f"    └ ❌ 試行 {attempt}/{max_retries} 失敗 ({model_name}) : {e}", flush=True)
-            time.sleep(3)
+                elapsed = time.time() - start
+                print(f"    └ 成功 ({elapsed:.1f}秒) [{model_name}]", flush=True)
+
+                summary_text = response.text
+                used_model = model_name
+                model_success = True
+                break
+
+            except FutureTimeoutError:
+                print(f"    └ ⚠ タイムアウト ({timeout_sec}秒超過) [{model_name}] 試行 {attempt}/{max_retries_per_model}", flush=True)
+
+            except Exception as e:
+                err = str(e)
+                if "503" in err or "UNAVAILABLE" in err or "high demand" in err:
+                    if attempt < max_retries_per_model:
+                        print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → {retry_wait_sec}秒後にリトライ ({attempt}/{max_retries_per_model})", flush=True)
+                        time.sleep(retry_wait_sec)
+                        continue
+                    else:
+                        print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → 最大リトライ回数に達したため次モデルへ切替", flush=True)
+                        break # このモデルを諦めて次のモデル（リストの次）へ
+                
+                if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                    print(f"    └ ⚠ RateLimit発生 [{model_name}] 10秒待機", flush=True)
+                    time.sleep(10)
+                    continue
+
+                print(f"    └ ❌ 試行 {attempt}/{max_retries_per_model} 失敗 ({model_name}) : {e}", flush=True)
+                time.sleep(3)
+
+        if model_success:
+            break
 
     if not summary_text:
         summary_text = (
@@ -560,7 +570,7 @@ def generate_and_post(
             }
         )
 
-        print(f"❌ [{part_title}] すべてのリトライが失敗しました", flush=True)
+        print(f"❌ [{part_title}] すべてのモデル・リトライで生成失敗", flush=True)
         return summary_text
 
     if used_model and append_footer:
