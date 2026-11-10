@@ -63,8 +63,9 @@ CHANNELS = {
 # https://aistudio.google.com/docs/models
 # https://aistudio.google.com/docs/pricing
 
-# 1便目・3便目用（軽量モデル優先）
+# 1便目・3便目用（3.6だけ試す→軽量モデルへ）
 LIGHT_GEMINI_MODELS = [
+    "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 ]
@@ -474,7 +475,7 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
 
 
 # =========================================================
-# 4. Gemini API 呼び出し & Discord投稿
+# 4. Gemini API 呼び出し & Discord投稿 (更新)
 # =========================================================
 
 def generate_and_post(
@@ -487,7 +488,7 @@ def generate_and_post(
     models_list: list[str] = None,
 ) -> str:
     if models_list is None:
-        models_list = GEMINI_MODELS
+        models_list = LIGHT_GEMINI_MODELS
 
     summary_text = None
     used_model = None
@@ -499,53 +500,50 @@ def generate_and_post(
             contents=prompt_text
         )
 
-    for model_name in models_list:
-        elapsed_total = time.time() - gemini_start
-        if elapsed_total > GEMINI_TOTAL_TIMEOUT_SEC:
-            print(f"❌ [{part_title}] Gemini処理全体タイムアウト", flush=True)
+    # リストの先頭（最優先モデル）を固定で使用する
+    model_name = models_list[0]
+    elapsed_total = time.time() - gemini_start
+    
+    if elapsed_total > GEMINI_TOTAL_TIMEOUT_SEC:
+        print(f"❌ [{part_title}] Gemini処理全体タイムアウト", flush=True)
+        return "⚠️ タイムアウトによりスキップされました。"
+
+    # 503エラー対策のリトライ設定（最大3回リトライ、5秒待機）
+    max_retries = 3
+    retry_wait_sec = 5
+
+    print(f"  └ [{part_title}] 使用モデル: {model_name}", flush=True)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            start = time.time()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(call_gemini, model_name)
+                response = future.result(timeout=timeout_sec)
+
+            elapsed = time.time() - start
+            print(f"    └ 成功 ({elapsed:.1f}秒) [{model_name}]", flush=True)
+
+            summary_text = response.text
+            used_model = model_name
             break
 
-        if "lite" in model_name:
-            current_timeout = GEMINI_TIMEOUT_SEC
-            max_attempts = 2
-        else:
-            current_timeout = GEMINI_TIMEOUT_SEC
-            max_attempts = 2
+        except FutureTimeoutError:
+            print(f"    └ ⚠ タイムアウト ({timeout_sec}秒超過) [{model_name}] 試行 {attempt}/{max_retries}", flush=True)
 
-        print(f"  └ [{part_title}] モデル試行中: {model_name}", flush=True)
+        except Exception as e:
+            err = str(e)
+            if "503" in err or "UNAVAILABLE" in err or "high demand" in err:
+                print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → {retry_wait_sec}秒後にリトライ ({attempt}/{max_retries})", flush=True)
+                time.sleep(retry_wait_sec)
+                continue
+            if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                print(f"    └ ⚠ RateLimit発生 [{model_name}] 10秒待機", flush=True)
+                time.sleep(10)
+                continue
 
-        for attempt in range(1, max_attempts + 1):
-            try:
-                start = time.time()
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(call_gemini, model_name)
-                    response = future.result(timeout=current_timeout)
-
-                elapsed = time.time() - start
-                print(f"    └ 成功 ({elapsed:.1f}秒) [{model_name}]", flush=True)
-
-                summary_text = response.text
-                used_model = model_name
-                break
-
-            except FutureTimeoutError:
-                print(f"    └ ⚠ タイムアウト ({current_timeout}秒超過) [{model_name}] 試行 {attempt}/{max_attempts}", flush=True)
-
-            except Exception as e:
-                err = str(e)
-                if "503" in err or "UNAVAILABLE" in err or "high demand" in err:
-                    print(f"    └ ⚠ Gemini混雑検知 [{model_name}] → 次モデルへ切替", flush=True)
-                    break
-                if "429" in err or "RESOURCE_EXHAUSTED" in err:
-                    print(f"    └ ⚠ RateLimit発生 [{model_name}] 10秒待機", flush=True)
-                    time.sleep(10)
-                    continue
-
-                print(f"    └ ❌ 試行 {attempt}/{max_attempts} 失敗 ({model_name}) : {e}", flush=True)
-                time.sleep(3)
-
-        if summary_text:
-            break
+            print(f"    └ ❌ 試行 {attempt}/{max_retries} 失敗 ({model_name}) : {e}", flush=True)
+            time.sleep(3)
 
     if not summary_text:
         summary_text = (
@@ -562,12 +560,7 @@ def generate_and_post(
             }
         )
 
-        print(
-            f"❌ [{part_title}] "
-            "すべてのモデルで生成失敗",
-            flush=True
-        )
-
+        print(f"❌ [{part_title}] すべてのリトライが失敗しました", flush=True)
         return summary_text
 
     if used_model and append_footer:
@@ -593,15 +586,11 @@ def generate_and_post(
         )
 
         if not result:
-            print(
-                "⚠ Discord投稿失敗",
-                flush=True
-            )
+            print("⚠ Discord投稿失敗", flush=True)
 
         time.sleep(1)
 
     return summary_text
-
 
 # =========================================================
 # 5. リマインド判定モジュール
