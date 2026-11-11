@@ -63,17 +63,18 @@ CHANNELS = {
 # https://aistudio.google.com/docs/models
 # https://aistudio.google.com/docs/pricing
 
-# 1便目・3便目用（3.6だけ試す→軽量モデルへ）
+# 軽量モデル優先
 LIGHT_GEMINI_MODELS = [
-    "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.8-flash",
 ]
 
-# 2便目（会話要約）用（しっかりしたモデル優先）
+# しっかりしたモデル優先
 HEAVY_GEMINI_MODELS = [
-    "gemini-3.8-flash",
     "gemini-3.6-flash",
+    "gemini-3.8-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 ]
@@ -706,8 +707,8 @@ def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: b
     specific_instruction = ""
     if is_battle:
         specific_instruction = """1. 【タイミング別メッセージ】
-   ・「折り返し」の場合：中盤の進行ペース確認、チケット消化、編成の試行錯誤を促す展開にしてください。
-   ・「最終日前日」の場合：明日午前4:00の終了（チケット消失）を強く注意喚起し、スコア詰めや最終確認を促してください。
+   ・「折り返し」の場合：中盤の進行ペース確認、編成の試行錯誤を促す展開にしてください。
+   ・「最終日前日」の場合：明日午前4:00に終了を強く注意喚起し、スコア詰めや最終確認を促してください。
 
 2. 【会話ログの反映】
    ・会話ログ内に【対象コンテンツ】に関する話題（ボス名、スコア、編成、TL、苦戦している様子など）がある場合：
@@ -912,7 +913,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 """
     print(len(prompt_info), len(prompt_chat))
     info_res = generate_and_post(
-        client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=LIGHT_GEMINI_MODELS
+        client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS
     )
     time.sleep(2)
     
