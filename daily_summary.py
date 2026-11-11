@@ -25,7 +25,7 @@ HTTP_TIMEOUT = (6.0, 20.0)
 GEMINI_TIMEOUT_SEC = 60
 
 # Gemini処理全体の制限時間
-GEMINI_TOTAL_TIMEOUT_SEC = 600
+GEMINI_TOTAL_TIMEOUT_SEC = 720
 
 # 共通ヘッダー
 DISCORD_HEADERS = {
@@ -502,7 +502,7 @@ def generate_and_post(
         )
 
     # 503エラー対策のリトライ設定（1モデルあたりの最大リトライ回数と待機秒数）
-    max_retries_per_model = 2
+    max_retries_per_model = 3
     retry_wait_sec = 5
 
     # リスト内のモデルを順番にループ（フォールバック）
