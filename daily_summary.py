@@ -25,7 +25,7 @@ HTTP_TIMEOUT = (6.0, 20.0)
 GEMINI_TIMEOUT_SEC = 60
 
 # Gemini処理全体の制限時間
-GEMINI_TOTAL_TIMEOUT_SEC = 720
+GEMINI_TOTAL_TIMEOUT_SEC = 300
 
 # 共通ヘッダー
 DISCORD_HEADERS = {
@@ -73,9 +73,9 @@ LIGHT_GEMINI_MODELS = [
 
 # しっかりしたモデル優先
 HEAVY_GEMINI_MODELS = [
-    "gemini-3.8-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
     "gemini-3.1-flash-lite",
 ]
 
