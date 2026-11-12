@@ -10,6 +10,9 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from bs4 import BeautifulSoup
 from google import genai
 import requests
+    
+# 1. 検索ツールを有効にした設定を作成
+from google.genai import types
 
 
 # =========================================================
@@ -498,7 +501,8 @@ def generate_and_post(
     def call_gemini(model_name):
         return client.models.generate_content(
             model=model_name,
-            contents=prompt_text
+            contents=prompt_text,
+            config=config
         )
 
     # 503エラー対策のリトライ設定（1モデルあたりの最大リトライ回数と待機秒数）
@@ -913,7 +917,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 """
     print(len(prompt_info), len(prompt_chat))
     info_res = generate_and_post(
-        client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS
+        client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS,config=types.GenerateContentConfig(tools=[{"google_search": {}}])
     )
     time.sleep(2)
     
