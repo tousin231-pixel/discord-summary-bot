@@ -25,10 +25,10 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # タイムアウト設定 (接続, 読み込み)
 HTTP_TIMEOUT = (6.0, 20.0)
-GEMINI_TIMEOUT_SEC = 30
+GEMINI_TIMEOUT_SEC = 45
 
 # Gemini処理全体の制限時間
-GEMINI_TOTAL_TIMEOUT_SEC = 300
+GEMINI_TOTAL_TIMEOUT_SEC = 400
 
 # 共通ヘッダー
 DISCORD_HEADERS = {
@@ -490,6 +490,7 @@ def generate_and_post(
     append_footer: bool = True,
     timeout_sec: int = GEMINI_TIMEOUT_SEC,
     models_list: list[str] = None,
+    config: types.GenerateContentConfig = None,
 ) -> str:
     if models_list is None:
         models_list = LIGHT_GEMINI_MODELS
