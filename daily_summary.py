@@ -537,11 +537,7 @@ def generate_and_post(
 
             except FutureTimeoutError:
                 print(f"    └ ⚠ タイムアウト ({timeout_sec}秒超過) [{model_name}] 試行 {attempt}/{max_retries_per_model}", flush=True)
-
-            except Exception as e:
-                err = str(e)
                 
-
             except Exception as e:
                 err = str(e)
                 if "503" in err or "UNAVAILABLE" in err or "high demand" in err:
