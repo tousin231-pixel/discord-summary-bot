@@ -5,7 +5,6 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 
 from bs4 import BeautifulSoup
 from google import genai
@@ -61,10 +60,6 @@ CHANNELS = {
         "1379072804988784780": "任務・イベント・その他",
     },
 }
-
-# 利用できるモデルは以下を参照
-# https://aistudio.google.com/docs/models
-# https://aistudio.google.com/docs/pricing
 
 # 軽量モデル優先
 LIGHT_GEMINI_MODELS = [
@@ -479,7 +474,7 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
 
 
 # =========================================================
-# 4. Gemini API 呼び出し & Discord投稿 (更新)
+# 4. Gemini API 呼び出し & Discord投稿 (更新版・SDKタイムアウト使用)
 # =========================================================
 
 def generate_and_post(
@@ -514,7 +509,7 @@ def generate_and_post(
             try:
                 start = time.time()
                 
-                # スレッドプールを外し、SDKのhttp_optionsタイムアウトに任せる
+                # SDK自体のタイムアウト(http_options)により、ここで確実に打ち切られます
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt_text
@@ -530,8 +525,8 @@ def generate_and_post(
 
             except Exception as e:
                 err = str(e)
-                # タイムアウトや通信エラーの判定
-                if "timeout" in err.lower() or "deadline" in err.lower():
+                # タイムアウトやデッドライン超過の検知
+                if "timeout" in err.lower() or "deadline" in err.lower() or "timed out" in err.lower():
                     print(f"    └ ⚠ タイムアウト ({timeout_sec}秒超過) [{model_name}] 試行 {attempt}/{max_retries_per_model}", flush=True)
                 elif "503" in err or "UNAVAILABLE" in err or "high demand" in err:
                     if attempt < max_retries_per_model:
@@ -551,8 +546,6 @@ def generate_and_post(
 
         if model_success:
             break
-
-    # （以降のDiscord投稿処理などはそのまま）
 
     if not summary_text:
         summary_text = (
@@ -786,7 +779,6 @@ def main():
         guild_id = ch_info.get("guild_id")
 
     print("[2/6] Wikiイベント情報＆誕生日情報を取得中...", flush=True)
-     # ── 今日の日付と曜日も取得しておく ──
     now_jst = get_now_jst()
     weekday_str = "月火水木金土日"[now_jst.weekday()]
     date_context = f"{now_jst.strftime('%Y年%-m月%-d日')}（{weekday_str}曜日）"
@@ -803,10 +795,11 @@ def main():
     logs_body = collect_chat_logs(guild_id, yesterday_utc)
 
     print("[5/6] Gemini APIによる要約を作成・投稿中...", flush=True)
-    # 修正後（45秒のタイムアウトをミリ秒で指定）
+    
+    # 💡 ここで http_options を使い、45秒（45000ミリ秒）で確実にタイムアウトするクライアントを作成
     client = genai.Client(
-    api_key=GEMINI_API_KEY,
-    http_options={"timeout": 45000}  # 45秒
+        api_key=GEMINI_API_KEY,
+        http_options={"timeout": 45000}
     )
 
     # プロンプト作成 (お知らせ編)
@@ -876,7 +869,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 ・ブルーアーカイブの「アロナ」として、元気で健気な言葉遣いを徹底してください。
 ・直前にゲーム情報の振り返り ＋ 次の『会話要約編』へつなぐ切り替えの挨拶が投稿されています。なので冒頭の挨拶は不要です。
 ・メッセージの最後に、アロナからの締めくくり挨拶を入れてください。
-  - NG事項: 「今日、〇年〇月〇日（〇曜日）も〜」は、お知らせ編で触れた可能性があります。【日付や曜日をそのまま復唱すること】は避けてください。
+  - NG事項: 「今日, 〇年〇月〇日（〇曜日）も〜」は、お知らせ編で触れた可能性があります。【日付や曜日をそのまま復唱すること】は避けてください。
   - 締めくくりのトーン: 曜日感（「今日は週の真ん中ですね」「もうすぐ週末ですね」など）や、季節感（出かける際の寒さ対策・体調管理など）を意識しつつ、昨日一日のサーバーの盛り上がりに対する感想と先生への応援メッセージで自然に締めくくってください。
 
 ■ 出力・フォーマットルール
@@ -913,7 +906,10 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 【会話ログ】
 {logs_body}
 """
+
+    # 文字数の出力
     print(len(prompt_info), len(prompt_chat))
+
     info_res = generate_and_post(
         client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS,
     )
