@@ -502,8 +502,7 @@ def generate_and_post(
     def call_gemini(model_name):
         return client.models.generate_content(
             model=model_name,
-            contents=prompt_text,
-            http_options={'timeout': timeout_sec * 1000}  # ミリ秒単位 (45秒 = 45000ms)
+            contents=prompt_text
         )
 
     #リトライ回数とリトライ前の待機時間
