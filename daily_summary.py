@@ -4,15 +4,11 @@ from datetime import datetime, timedelta, timezone, UTC
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from bs4 import BeautifulSoup
 from google import genai
 import requests
     
-# 1. 検索ツールを有効にした設定を作成
-from google.genai import types
-
 
 # =========================================================
 # 1. 設定 & 定数管理

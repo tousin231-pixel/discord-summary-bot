@@ -1,6 +1,5 @@
 import os
 import random
-import re
 import time
 from google import genai
 import requests
