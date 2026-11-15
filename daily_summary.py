@@ -22,12 +22,25 @@ from google.genai import types
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# タイムアウト設定 (接続, 読み込み)
+# --- 調整可能なパラメータ・定数 ---
+# タイムアウト・リトライ設定
 HTTP_TIMEOUT = (6.0, 20.0)
-GEMINI_TIMEOUT_SEC = 45
+GEMINI_HTTP_TIMEOUT_MS = 60000  # Geminiクライアントのタイムアウト (ミリ秒)
+GEMINI_TOTAL_TIMEOUT_SEC = 400  # Gemini処理全体の制限時間 (秒)
+MAX_RETRIES_PER_MODEL = 3       # モデルごとの最大リトライ回数
+RETRY_WAIT_SEC = 5              # 503エラー時などのリトライ待機秒数
+RATE_LIMIT_WAIT_SEC = 10        # 429 RateLimit発生時の待機秒数
 
-# Gemini処理全体の制限時間
-GEMINI_TOTAL_TIMEOUT_SEC = 400
+# Discordメッセージ・取得制限設定
+DISCORD_MAX_LENGTH = 1800       # Discordの文字制限（分割サイズ）※ディスコードに一度にかける文字数は2000文字
+POLL_FETCH_LIMIT = 50           # 投票メッセージ取得件数上限（お知らせ編）
+CHANNEL_MESSAGE_LIMIT = 100     # 通常チャンネルメッセージ取得件数上限（要約編）※ディスコードAPIが取得するログの上限が100
+THREAD_MESSAGE_LIMIT = 100       # スレッドメッセージ取得件数上限（要約編）※ディスコードAPIが取得するログの上限が100
+WIKI_EVENT_DISPLAY_LIMIT = 12   # 表示するWikiイベントの最大件数
+
+# 待機・スリープ設定 (秒)
+POST_SLEEP_SEC = 1              # Discord投稿時のインターバル
+BETWEEN_MESSAGES_SLEEP_SEC = 2  # 1便目・2便目送信間のインターバル
 
 # 共通ヘッダー
 DISCORD_HEADERS = {
@@ -112,8 +125,8 @@ def fetch_discord_api(endpoint: str, method: str = "GET", payload: dict = None):
         print(f"⚠️ Discord API 通信例外 ({endpoint}): {e}", flush=True)
         return None
 
-def safe_split_text(text: str, max_length: int = 1800) -> list[str]:
-    """Discordの文字制限(2000文字)を超えないよう安全にテキストを分割"""
+def safe_split_text(text: str, max_length: int = DISCORD_MAX_LENGTH) -> list[str]:
+    """Discordの文字制限を超えないよう安全にテキストを分割"""
     lines = text.split("\n")
     chunks = []
     current_chunk = ""
@@ -255,7 +268,7 @@ def get_bluearchive_game_events():
             parsed_events.append({"raw_text": line, "start_dt": start_dt, "end_dt": end_dt})
 
         summary_str = (
-            "\n".join(events_text_list[:12])
+            "\n".join(events_text_list[:WIKI_EVENT_DISPLAY_LIMIT])
             if events_text_list
             else "現在特別なゲーム内お知らせはありません。"
         )
@@ -334,7 +347,7 @@ def fetch_guild_events(guild_id: str, now_utc: datetime):
 
 def fetch_polls(guild_id: str, yesterday_utc: datetime):
     """投票置き場チャンネルから投票とコメントを取得"""
-    messages = fetch_discord_api(f"channels/{POLL_CHANNEL_ID}/messages?limit=50")
+    messages = fetch_discord_api(f"channels/{POLL_CHANNEL_ID}/messages?limit={POLL_FETCH_LIMIT}")
     if not messages:
         return "現在アクティブな投票はありません。", "特になし（投票のみ進行中）"
 
@@ -388,7 +401,7 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
     for cat_name, channels in CHANNELS.items():
         collected_data[cat_name] = {}
         for ch_id, ch_name in channels.items():
-            messages = fetch_discord_api(f"channels/{ch_id}/messages?limit=100")
+            messages = fetch_discord_api(f"channels/{ch_id}/messages?limit={CHANNEL_MESSAGE_LIMIT}")
             if not messages:
                 continue
 
@@ -442,7 +455,7 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
                     except Exception:
                         pass
 
-                msg_data = fetch_discord_api(f"channels/{th_id}/messages?limit=50")
+                msg_data = fetch_discord_api(f"channels/{th_id}/messages?limit={THREAD_MESSAGE_LIMIT}")
                 if msg_data:
                     th_msgs = []
                     for msg in reversed(msg_data):
@@ -474,7 +487,7 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
 
 
 # =========================================================
-# 4. Gemini API 呼び出し & Discord投稿 (更新版・SDKタイムアウト使用)
+# 4. Gemini API 呼び出し & Discord投稿
 # =========================================================
 
 def generate_and_post(
@@ -483,7 +496,7 @@ def generate_and_post(
     target_ch_id: str,
     part_title: str,
     append_footer: bool = True,
-    timeout_sec: int = GEMINI_TIMEOUT_SEC,
+    timeout_sec: int = GEMINI_HTTP_TIMEOUT_MS // 1000,
     models_list: list[str] = None,
 ) -> str:
     if models_list is None:
@@ -492,9 +505,6 @@ def generate_and_post(
     summary_text = None
     used_model = None
     gemini_start = time.time()
-
-    max_retries_per_model = 3
-    retry_wait_sec = 5
 
     for model_name in models_list:
         elapsed_total = time.time() - gemini_start
@@ -505,11 +515,10 @@ def generate_and_post(
         print(f"  └ [{part_title}] モデル試行中: {model_name}", flush=True)
 
         model_success = False
-        for attempt in range(1, max_retries_per_model + 1):
+        for attempt in range(1, MAX_RETRIES_PER_MODEL + 1):
             try:
                 start = time.time()
                 
-                # SDK自体のタイムアウト(http_options)により、ここで確実に打ち切られます
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt_text
@@ -525,23 +534,22 @@ def generate_and_post(
 
             except Exception as e:
                 err = str(e)
-                # タイムアウトやデッドライン超過の検知
                 if "timeout" in err.lower() or "deadline" in err.lower() or "timed out" in err.lower():
-                    print(f"    └ ⚠ タイムアウト ({timeout_sec}秒超過) [{model_name}] 試行 {attempt}/{max_retries_per_model}", flush=True)
+                    print(f"    └ ⚠ タイムアウト ({timeout_sec}秒超過) [{model_name}] 試行 {attempt}/{MAX_RETRIES_PER_MODEL}", flush=True)
                 elif "503" in err or "UNAVAILABLE" in err or "high demand" in err:
-                    if attempt < max_retries_per_model:
-                        print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → {retry_wait_sec}秒後にリトライ ({attempt}/{max_retries_per_model})", flush=True)
-                        time.sleep(retry_wait_sec)
+                    if attempt < MAX_RETRIES_PER_MODEL:
+                        print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → {RETRY_WAIT_SEC}秒後にリトライ ({attempt}/{MAX_RETRIES_PER_MODEL})", flush=True)
+                        time.sleep(RETRY_WAIT_SEC)
                         continue
                     else:
                         print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → 最大リトライ回数に達したため次モデルへ切替", flush=True)
                         break
                 elif "429" in err or "RESOURCE_EXHAUSTED" in err:
-                    print(f"    └ ⚠ RateLimit発生 [{model_name}] 10秒待機", flush=True)
-                    time.sleep(10)
+                    print(f"    └ ⚠ RateLimit発生 [{model_name}] {RATE_LIMIT_WAIT_SEC}秒待機", flush=True)
+                    time.sleep(RATE_LIMIT_WAIT_SEC)
                     continue
                 else:
-                    print(f"    └ ❌ 試行 {attempt}/{max_retries_per_model} 失敗 ({model_name}) : {e}", flush=True)
+                    print(f"    └ ❌ 試行 {attempt}/{MAX_RETRIES_PER_MODEL} 失敗 ({model_name}) : {e}", flush=True)
                     time.sleep(3)
 
         if model_success:
@@ -575,7 +583,7 @@ def generate_and_post(
 
     chunks = safe_split_text(
         summary_text,
-        max_length=1800
+        max_length=DISCORD_MAX_LENGTH
     )
 
     for chunk in chunks:
@@ -590,9 +598,10 @@ def generate_and_post(
         if not result:
             print("⚠ Discord投稿失敗", flush=True)
 
-        time.sleep(1)
+        time.sleep(POST_SLEEP_SEC)
 
     return summary_text
+
 
 # =========================================================
 # 5. リマインド判定モジュール
@@ -741,14 +750,12 @@ Discordサーバー「足跡の化石」の{ch_label}の先生（メンバー）
      - 話題で大盛り上がりの日：5〜8ターン（往復）程度
 
 ■ 話題の判定ルール（時間・返信機能）
-・ログには `[HH:MM]` の投稿時刻と、返信機能が使われた場合の `(↩️ 〇〇の「...」への返信)` が含まれます。
-・時間が離れていても `(↩️ ...への返信)` がある場合は、同一の話題（継続）として扱ってください。
-・返信機能がなく数時間以上空いている場合は、独立した新しい話題として判断してください。
+・ログには `[HH:MM]` の投稿時刻と、返信機能が使われた場合の `(↩️ 〇〇のクォーテーション等への返信)` が含まれます。
+・時間が離れていても返信関係がある場合は、同一の話題（継続）として扱ってください。
 
 ■ 絶対遵守事項（ファクトチェック）
 1. 提供された入力データ（概要・ログ）にある事実のみに基づいて出力してください。
 2. 入力データ内に「メンテナンス実施」の明確な記載がない限り、絶対に「メンテナンス」という言葉や注意喚起を含めないでください。
-3. イベントの種別を勝手に変更・混同しないでください。
 
 ■ 出力フォーマット
 以下の形式で会話を出力してください。
@@ -796,10 +803,10 @@ def main():
 
     print("[5/6] Gemini APIによる要約を作成・投稿中...", flush=True)
     
-    # 💡 ここで http_options を使い、45秒（45000ミリ秒）で確実にタイムアウトするクライアントを作成
+    # 定数からGeminiクライアントを作成
     client = genai.Client(
         api_key=GEMINI_API_KEY,
-        http_options={"timeout": 45000}
+        http_options={"timeout": GEMINI_HTTP_TIMEOUT_MS}
     )
 
     # プロンプト作成 (お知らせ編)
@@ -817,8 +824,8 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 
 ■ キャラクター設定とトーン
 ・ブルーアーカイブの「アロナ」として、元気で健気な言葉遣いを徹底してください。
-・冒頭は朝の挨拶から始めてください。その際は【今日の日付】を参考に季節感（寒さ・暖かさなど）や曜日、平日や休日、祝日やイベント日であればその話題に触れてもかまいません。
-・メッセージの最後は、お知らせ編を終えて次の「会話要約編」の投稿を楽しみに行きたくなるような、一言添えた締めくくりにしてください。
+・冒頭は朝の挨拶から始めてください。その際は【今日の日付】を参考に季節感や曜日などに触れてもかまいません。
+・メッセージの最後は、次の「会話要約編」の投稿を楽しみに行きたくなるような一言を添えてください。
 
 ■ 出力・表示分岐ルール
 1. 【誕生日・サーバーイベント・投票情報の表示判定】
@@ -826,8 +833,6 @@ Discordサーバー「足跡の化石」の先生たちに向けて
    ・1つでも該当情報がある場合：該当する項目の見出しのみを立てて詳細を記載。
 2. 【ゲーム情報の表示判定】
    ・該当する情報が無い場合は、見出しごと省略してください。
-3. 【階層・インデントのルール】
-   ・同カテゴリ内に複数の情報がある場合は、インデント（スペース2つ＋`- `）を入れてぶら下げてください。
 
 ■ 出力フォーマット
 📢 **足跡の化石 デイリーサマリー（お知らせ・ゲーム情報編）**
@@ -838,7 +843,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 （情報がある場合のみ記載）
 
 📅 **本日のサーバーイベント**
-（情報がある場合のみ、JST時間およびイベントURL・リンクを添えて記載）
+（情報がある場合のみ記載）
 
 📊 **投票置き場のお知らせ**
 （情報がある場合のみ記載）
@@ -863,28 +868,15 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 ■ コミュニティ前提ルール（厳格適用）
 ・ネタバレOK・歓迎のサーバーです。
 ・ゲーム内用語、ボス名、キャラ名は【会話ログに実際に存在する表記】のみを使用してください。
-・カッコ書き補足（例：〇〇（△△））は、同一ログ内に公称と俗称の両方が実際に書き込まれている場合のみ許可します。
 
 ■ キャラクター設定とトーン
 ・ブルーアーカイブの「アロナ」として、元気で健気な言葉遣いを徹底してください。
-・直前にゲーム情報の振り返り ＋ 次の『会話要約編』へつなぐ切り替えの挨拶が投稿されています。なので冒頭の挨拶は不要です。
-・メッセージの最後に、アロナからの締めくくり挨拶を入れてください。
-  - NG事項: 「今日, 〇年〇月〇日（〇曜日）も〜」は、お知らせ編で触れた可能性があります。【日付や曜日をそのまま復唱すること】は避けてください。
-  - 締めくくりのトーン: 曜日感（「今日は週の真ん中ですね」「もうすぐ週末ですね」など）や、季節感（出かける際の寒さ対策・体調管理など）を意識しつつ、昨日一日のサーバーの盛り上がりに対する感想と先生への応援メッセージで自然に締めくくってください。
+・冒頭の挨拶は不要です。
+・メッセージの最後に、アロナからの締めくくり挨拶（季節感やサーバーの盛り上がりへの感想など）を入れてください。
 
 ■ 出力・フォーマットルール
 ・同じチャンネル（<#ID>）を要約内で2度以上登場させないでください。
 ・新スレッド（ログ内で 🆕 マーク付）は頭に 🆕 を付けて出力してください。
-・最後に、アロナからの締めくくりの感想＆先生への労いメッセージを添えてください。
-
-■ 話題の判定・抽出ルール
-1. 話題のグループ化（関連性の判定）
-返信マークの優先: 時間が離れていても (↩️ 〇〇の「...」への返信) が含まれる投稿は、参照元の投稿と同じ話題（連続したやり取り）として扱ってください。
-時間の近さによる判定: 返信マークがない場合でも、投稿時刻 [HH:MM] が近く、文脈上受け答えが成り立っている投稿同士は同一の話題として扱ってください。
-話題の切断: 返信マークがなく、前の投稿から数時間以上空いており、文脈上受け答えが成り立っていない場合は、独立した新しい話題として判断してください。
-2. 単発投稿の除外（要約対象の絞り込み）
-除外対象: 上記の基準でグループ化した結果、他のユーザーからの返信・受け答え・連続した対話が発生せず、1人だけの独立した投稿で終わっている話題は除外してください。
-要約対象: 複数人による実質的なやり取りや対話が成り立っている話題のみを要約してください。
 
 【出力フォーマット】
 💬 **足跡の化石 デイリーサマリー（みんなの会話要約編）**
@@ -907,13 +899,10 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 {logs_body}
 """
 
-    # 文字数の出力
-    print(len(prompt_info), len(prompt_chat))
-
     info_res = generate_and_post(
         client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS,
     )
-    time.sleep(2)
+    time.sleep(BETWEEN_MESSAGES_SLEEP_SEC)
     
     generate_and_post(
         client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS
