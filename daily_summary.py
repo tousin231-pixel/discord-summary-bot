@@ -896,7 +896,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 """
 
     # 文字数の出力
-    print(len(prompt_info), len(prompt_chat))
+    print("お知らせ編", len(prompt_info), "要約編", len(prompt_chat))
     
     info_res = generate_and_post(
         client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS,
