@@ -22,7 +22,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 # タイムアウト・リトライ設定
 HTTP_TIMEOUT = (6.0, 20.0)
 GEMINI_HTTP_TIMEOUT_MS = 60000  # Geminiクライアントのタイムアウト (ミリ秒)
-GEMINI_TOTAL_TIMEOUT_SEC = 400  # Gemini処理全体の制限時間 (秒)
+GEMINI_TOTAL_TIMEOUT_SEC = 600  # Gemini処理全体の制限時間 (秒)
 MAX_RETRIES_PER_MODEL = 3       # モデルごとの最大リトライ回数
 RETRY_WAIT_SEC = 5              # 503エラー時などのリトライ待機秒数
 RATE_LIMIT_WAIT_SEC = 10        # 429 RateLimit発生時の待機秒数
@@ -86,7 +86,7 @@ HEAVY_GEMINI_MODELS = [
     "gemini-3.1-flash-lite",
 ]
 
-#応答だけで4分かかったやつ["gemini-4-hydrogen","gemini-3.8-flash",]さすがに重すぎる
+#["gemini-4-hydrogen","gemini-3.8-flash",]が桁違いに重いみたいなので注意
 
 # タイムゾーン定義
 JST = timezone(timedelta(hours=9))
