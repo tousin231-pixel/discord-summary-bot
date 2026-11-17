@@ -520,7 +520,7 @@ def fetch_google_news_topics(query="ブルーアーカイブ"):
         items = root.findall(".//item")
         
         news_list = []
-        for item in items[:15]: # 上位5件程度を抽出
+        for item in items[:5]: # 上位5件程度を抽出
             title = item.find("text()", namespaces={}) or item.find("title")
             title_text = title.text if title is not None else ""
             pub_date = item.find("pubDate")
