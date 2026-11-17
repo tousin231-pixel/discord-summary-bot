@@ -347,10 +347,7 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
     print(f"プロンプト文字数: {len(prompt)}文字", flush=True)
     print("[4/4] Gemini APIによる紹介文生成を開始します...", flush=True)
     # client生成時に http_options を渡す
-    client = genai.Client(
-        api_key=GEMINI_API_KEY,
-        http_options={"timeout": GEMINI_HTTP_TIMEOUT_MS}
-    )
+    client = genai.Client(api_key=GEMINI_API_KEY,http_options={"timeout": GEMINI_HTTP_TIMEOUT_MS})
 
     # 堅牢なフォールバック付き関数で生成
     generated_text = generate_content_with_fallback(client, prompt)
