@@ -4,6 +4,10 @@ import time
 from google import genai
 import requests
 import concurrent.futures
+import concurrent.futures
+import urllib.request
+import urllib.parse
+import xml.etree.ElementTree as ET
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -13,11 +17,15 @@ FORUM_CHANNEL_ID = "1419978214394167296"
 
 # 利用するモデルの優先順位リスト
 FALLBACK_MODELS = [
+    "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite", 
 ]
 
 headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
+
+# 設定定数（お好みの確率に調整してください：0.25 = 25%の確率でニュース枠）
+NEWS_PROBABILITY = 0.25
 
 
 def get_target_forum_threads():
@@ -130,9 +138,30 @@ def get_thread_recent_messages(thread_id, limit=50):
             return "\n".join(combined_text)
     return "（投稿内容が取得できませんでした）"
 
+def fetch_google_news_for_topic(query="ブルーアーカイブ コラボ OR イベント OR グッズ"):
+    """GoogleニュースのRSSから最新記事のタイトルとリンク・日付を取得"""
+    print(f"  └ [Googleニュース取得] 検索中: {query}", flush=True)
+    encoded_query = urllib.parse.quote(query)
+    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ja&gl=JP&ceid=JP:ja"
+    req = urllib.request.Request(rss_url, headers={"User-Agent": "Mozilla/5.0"})
 
-import concurrent.futures
-# （中略）
+    try:
+        with urllib.request.urlopen(req, timeout=10) as res:
+            xml_data = res.read()
+        root = ET.fromstring(xml_data)
+        items = root.findall(".//item")
+
+        news_items = []
+        for item in items[:5]:  # 最新5件を取得
+            title = item.find("title").text if item.find("title") is not None else ""
+            pub_date = item.find("pubDate").text if item.find("pubDate") is not None else ""
+            if title:
+                news_items.append(f"・{title} ({pub_date})")
+
+        return "\n".join(news_items) if news_items else None
+    except Exception as e:
+        print(f"  └ ⚠️ Googleニュース取得失敗: {e}", flush=True)
+        return None
 
 def call_gemini_with_timeout(client, model_name, prompt, timeout_sec=60):
     """
@@ -181,20 +210,69 @@ def generate_content_with_fallback(client, prompt):
 
     return None
 
-
 def main():
     threads, story_tag_ids, tag_id_to_name = get_target_forum_threads()
-    if not threads:
-        print("⚠️ 該当するフォーラムスレッドが見つからなかったため終了します。", flush=True)
-        return
 
-    # ランダムに1つ選定
-    selected_thread = random.choice(threads)
+    # ニュース枠を引くかどうかの判定（スレッド数に左右されない固定確率）
+    use_google_news = (random.random() < NEWS_PROBABILITY) or (not threads)
+    news_data = None
+
+    if use_google_news:
+        print("[3/4] 🎲 抽選結果：【Googleニュース連動枠】が選ばれました！", flush=True)
+        news_data = fetch_google_news_for_topic()
+
+    # ニュース枠が選ばれた＆ニュース取得に成功した場合
+    if use_google_news and news_data:
+        corner_title = "📰 **【アロプラチャンネル！シャーレ外・最新トピック通信】**"
+        prompt = f"""あなたは「ブルーアーカイブ」のアロナとプラナです。
+Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの先生（メンバー）に向けて、現実世界で話題になっているブルーアーカイブの最新ニュース（リアルイベント、コラボ、グッズ、メディア展開など）を1つピックアップして紹介し、雑談のきっかけを作ってください。
+
+■ 入力データ
+・コーナータイトル：{corner_title}
+・Googleニュース最新トピック一覧：
+{news_data}
+
+■ キャラクター設定とトーン
+アロナとプラナの「2人の掛け合い（会話形式）」で作成してください。
+・アロナ：明るく元気で健気。現実世界のイベントやコラボにワクワクしている。
+・プラナ：冷静沈着、丁寧で静かなトーン。ニュースの要点を落ち着いて補足する。
+
+■ 進行・会話展開ルール
+1. 【タイトルの案内】
+   ・出力の先頭は必ず「{corner_title}」から始めてください。
+2. 【トピックの選定と紹介】
+   ・上記のニュース一覧から、先生たちが盛り上がりそうな明るい話題（リアルイベント、コラボカフェ、ポップアップショップ、ライブ、新グッズなど）を**1つだけ**選んで話題にしてください。
+   ・複数詰め込まず、1つの話題を掘り下げてください。
+3. 【雑談への誘導】
+   ・締めくくりは「先生方はこのイベントやコラボ、チェックしましたか？」「現地に行く予定の先生はいますか？」など、雑談チャンネルで感想や予定を語り合いたくなる一言で締めてください。
+4. 【テンポと会話量（重要）】
+   ・1回の発言は【最大60〜80文字程度】に抑え、4〜6ターン（往復）程度でテンポよくまとめてください。
+
+■ 絶対遵守事項（ファクトチェック）
+・提供されたニュース見出しにある事実のみに基づいて話し、開催日程や場所などを勝手に捏造しないでください。
+
+■ 出力フォーマット
+{corner_title}
+
+**アロナ**: 「〜〜」
+**プラナ**: 「〜〜」
+**アロナ**: 「〜〜」
+**プラナ**: 「〜〜」
+"""
+    else:
+        # ニュース枠ではなかった場合（またはニュース取得失敗時）は、従来の過去スレッド発掘を実行
+        if not threads:
+            print("⚠️ 該当するフォーラムスレッドが見つからず、ニュースも取得できなかったため終了します。", flush=True)
+            return
+
+        selected_thread = random.choice(threads)
     thread_id = selected_thread["id"]
     thread_name = selected_thread.get("name", "無題のスレッド")
     applied_tags = set(selected_thread.get("applied_tags", []))
 
     is_story = bool(applied_tags & story_tag_ids)
+
+    
 
     print(
         f"[3/4] ピックアップした話題: 「{thread_name}」 (ストーリー属性: {is_story})",
