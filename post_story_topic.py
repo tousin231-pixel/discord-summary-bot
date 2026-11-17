@@ -3,7 +3,6 @@ import random
 import time
 from google import genai
 import requests
-import concurrent.futures
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -19,7 +18,7 @@ HTTP_TIMEOUT = (6.0, 20.0)
 MAX_RETRIES_PER_MODEL = 3       # モデルごとの最大リトライ回数
 RETRY_WAIT_SEC = 5              # 503エラー時などのリトライ待機秒数
 RATE_LIMIT_WAIT_SEC = 10        # 429 RateLimit発生時の待機秒数
-GEMINI_HTTP_TIMEOUT_MS = 60000  # タイムアウト設定
+GEMINI_HTTP_TIMEOUT_MS = 60000  # タイムアウト設定 (ミリ秒)
 
 # 安定性の高い軽量モデル優先のリスト（503対策）
 FALLBACK_MODELS = [
@@ -34,7 +33,7 @@ headers = {
 }
 
 # 設定定数（0.25 = 25%の確率でニュース枠。テスト時は 1.0 にすると常にニュースになります）
-NEWS_PROBABILITY = 0.5
+NEWS_PROBABILITY = 0.25
 
 
 def get_target_forum_threads():
@@ -222,7 +221,18 @@ def main():
 
     # ニュース枠が選ばれた＆ニュース取得に成功した場合
     if use_google_news and news_data:
-        corner_title = "📰 **【アロプラニュース！シャーレ外・最新トピック通信】**"
+        corner_title = "📰 **【アロプラチャンネル！シャーレ外・最新トピック通信】**"
+        
+        # サーバー内の既存フォーラムスレッド一覧をテキスト化（ニュースとの照合・誘導用）
+        if threads:
+            thread_list_lines = [
+                f"・スレッド名: 「{th.get('name', '無題')}」 / リンク: <#{th['id']}>"
+                for th in threads[:60]
+            ]
+            existing_threads_info = "\n".join(thread_list_lines)
+        else:
+            existing_threads_info = "（現在該当するスレッドはありません）"
+
         prompt = f"""あなたは「ブルーアーカイブ」のアロナとプラナです。
 Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの先生（メンバー）に向けて、現実世界で話題になっているブルーアーカイブの最新ニュース（リアルイベント、コラボ、グッズ、メディア展開など）を1つピックアップして紹介し、雑談のきっかけを作ってください。
 
@@ -230,6 +240,8 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 ・コーナータイトル：{corner_title}
 ・Googleニュース最新トピック一覧：
 {news_data}
+・サーバー内の既存フォーラムスレッド一覧：
+{existing_threads_info}
 
 ■ キャラクター設定とトーン
 アロナとプラナの「2人の掛け合い（会話形式）」で作成してください。
@@ -242,18 +254,20 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 2. 【トピックの選定と紹介】
    ・上記のニュース一覧から、先生たちが盛り上がりそうな明るい話題（リアルイベント、コラボカフェ、ポップアップショップ、ライブ、新グッズなど）を**1つだけ**選んで話題にしてください。
    ・複数詰め込まず、1つの話題を掘り下げてください。
-3. 【雑談への誘導】
-   ・締めくくりは「先生方はこのイベントやコラボ、チェックしましたか？」「現地に行く予定の先生はいますか？」など、雑談チャンネルで感想や予定を語り合いたくなる一言で締めてください。
+3. 【関連フォーラムスレッドへの自動誘導（重要）】
+   ・選んだニュースの話題と**同一、または非常に近いテーマの既存スレッド**が【サーバー内の既存フォーラムスレッド一覧】にあるか確認してください（例：「金沢さんぽ」「〇〇コラボ」「△△ライブ」など）。
+   ・該当する既存スレッドが見つかった場合：会話の後半で必ずそのスレッドリンク（`<#ID>`）を提示し、「ちょうどサーバー内にも専用スレッド（<#ID>）が立っていますよ！現地報告や感想はぜひこちらへ！」のように自然に誘導してください。
+   ・該当するスレッドが見当たらない場合：無理に無関係なスレッドをリンクせず、**選んだニュースの内容に合わせた自然な問いかけ**（イベントなら「現地に行く予定の先生はいますか？」、グッズやフィギュアなら「お迎え予定の先生はいますか？」、ゲーム・運営情報なら「先生方はもうチェックしましたか？」など）で雑談を促してください。
 4. 【テンポと会話量（重要）】
    ・1回の発言は【最大60〜80文字程度】に抑え、4〜6ターン（往復）程度でテンポよくまとめてください。
 
 ■ 絶対遵守事項（ファクトチェック）
-・提供されたニュース見出しにある事実のみに基づいて話し、開催日程や場所などを勝手に捏造しないでください。
+・提供されたニュース見出しおよびスレッド一覧にある事実・IDのみを使用し、存在しないリンクや開催日程・場所などを勝手に捏造しないでください。
 
 ■ 出力フォーマット
 {corner_title}
 
-**อロナ**: 「〜〜」
+**アロナ**: 「〜〜」
 **プラナ**: 「〜〜」
 **アロナ**: 「〜〜」
 **プラナ**: 「〜〜」
@@ -346,8 +360,7 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 
     print(f"プロンプト文字数: {len(prompt)}文字", flush=True)
     print("[4/4] Gemini APIによる紹介文生成を開始します...", flush=True)
-    # client生成時に http_options を渡す
-    client = genai.Client(api_key=GEMINI_API_KEY,http_options={"timeout": GEMINI_HTTP_TIMEOUT_MS})
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options={"timeout": GEMINI_HTTP_TIMEOUT_MS})
 
     # 堅牢なフォールバック付き関数で生成
     generated_text = generate_content_with_fallback(client, prompt)
