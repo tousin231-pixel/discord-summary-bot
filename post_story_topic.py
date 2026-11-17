@@ -33,7 +33,7 @@ headers = {
 }
 
 # 設定定数（0.25 = 25%の確率でニュース枠。テスト時は 1.0 にすると常にニュースになります）
-NEWS_PROBABILITY = 0.25
+NEWS_PROBABILITY = 1.0
 
 
 def get_target_forum_threads():
