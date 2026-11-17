@@ -24,7 +24,7 @@ FALLBACK_MODELS = [
 headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
 
 # 設定定数（お好みの確率に調整してください：0.25 = 25%の確率でニュース枠）
-NEWS_PROBABILITY = 0.25
+NEWS_PROBABILITY = 1
 
 
 def get_target_forum_threads():
