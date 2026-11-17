@@ -139,7 +139,7 @@ def get_thread_recent_messages(thread_id, limit=50):
 
 
 def fetch_google_news_for_topic(query="ブルーアーカイブ"):
-    """GoogleニュースのRSSから最新記事のタイトルを取得"""
+    """GoogleニュースのRSSから最新記事のタイトルを取得し、ランダムにシャッフルして返す"""
     print(f"  └ [Googleニュース取得] 検索中: {query}", flush=True)
     encoded_query = urllib.parse.quote(query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ja&gl=JP&ceid=JP:ja"
@@ -152,13 +152,20 @@ def fetch_google_news_for_topic(query="ブルーアーカイブ"):
         items = root.findall(".//item")
 
         news_items = []
-        for item in items[:15]:
+        for item in items[:20]:  # 少し多めの20件ほどから拾う
             title = item.find("title").text if item.find("title") is not None else ""
             pub_date = item.find("pubDate").text if item.find("pubDate") is not None else ""
             if title:
                 news_items.append(f"・{title} ({pub_date})")
 
-        return "\n".join(news_items) if news_items else None
+        if news_items:
+            # 取得したニュースを毎回ランダムにシャッフルしてマンネリを防ぐ
+            random.shuffle(news_items)
+            print(f"  └ [Googleニュース取得成功] {len(news_items)}件の記事をシャッフルして渡します", flush=True)
+            return "\n".join(news_items[:10])  # シャッフルした中から上位10件を渡す
+            
+        return "直近の関連ニュースは見つかりませんでした。"
+
     except Exception as e:
         print(f"  └ ⚠️ Googleニュース取得失敗: {e}", flush=True)
         return None
