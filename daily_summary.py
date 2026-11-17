@@ -501,7 +501,7 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
     return logs_body.strip() or "過去24時間の新規投稿はありませんでした。"
 
 
-def fetch_google_news_topics(query="ブルーアーカイブ OR ブルアカ"):
+def fetch_google_news_topics(query="ブルーアーカイブ"):
     """GoogleニュースのRSSから指定キーワードの最新トピックを取得する"""
     print(f"  └ [Googleニュース取得] キーワード: '{query}' の最新情報を収集中...", flush=True)
     encoded_query = urllib.parse.quote(query)
