@@ -152,7 +152,7 @@ def fetch_google_news_for_topic(query="ブルーアーカイブ コラボ OR イ
         items = root.findall(".//item")
 
         news_items = []
-        for item in items[:5]:  # 最新5件を取得
+        for item in items[:15]:  # 最新5件を取得
             title = item.find("title").text if item.find("title") is not None else ""
             pub_date = item.find("pubDate").text if item.find("pubDate") is not None else ""
             if title:
