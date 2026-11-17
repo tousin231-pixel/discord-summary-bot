@@ -19,7 +19,7 @@ HTTP_TIMEOUT = (6.0, 20.0)
 MAX_RETRIES_PER_MODEL = 3       # モデルごとの最大リトライ回数
 RETRY_WAIT_SEC = 5              # 503エラー時などのリトライ待機秒数
 RATE_LIMIT_WAIT_SEC = 10        # 429 RateLimit発生時の待機秒数
-GEMINI_HTTP_TIMEOUT_MS = 60000　# タイムアウト設定
+GEMINI_HTTP_TIMEOUT_MS = 60000  # タイムアウト設定
 
 # 安定性の高い軽量モデル優先のリスト（503対策）
 FALLBACK_MODELS = [
