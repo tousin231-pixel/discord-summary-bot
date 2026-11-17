@@ -138,7 +138,7 @@ def get_thread_recent_messages(thread_id, limit=50):
             return "\n".join(combined_text)
     return "（投稿内容が取得できませんでした）"
 
-def fetch_google_news_for_topic(query="ブルーアーカイブ コラボ OR イベント OR グッズ"):
+def fetch_google_news_for_topic(query="ブルーアーカイブ OR ブルアカ"):
     """GoogleニュースのRSSから最新記事のタイトルとリンク・日付を取得"""
     print(f"  └ [Googleニュース取得] 検索中: {query}", flush=True)
     encoded_query = urllib.parse.quote(query)
@@ -152,7 +152,7 @@ def fetch_google_news_for_topic(query="ブルーアーカイブ コラボ OR イ
         items = root.findall(".//item")
 
         news_items = []
-        for item in items[:15]:  # 最新5件を取得
+        for item in items[:15]:  # 最新15件を取得
             title = item.find("title").text if item.find("title") is not None else ""
             pub_date = item.find("pubDate").text if item.find("pubDate") is not None else ""
             if title:
@@ -266,42 +266,40 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
             return
 
         selected_thread = random.choice(threads)
-    thread_id = selected_thread["id"]
-    thread_name = selected_thread.get("name", "無題のスレッド")
-    applied_tags = set(selected_thread.get("applied_tags", []))
+        thread_id = selected_thread["id"]
+        thread_name = selected_thread.get("name", "無題のスレッド")
+        applied_tags = set(selected_thread.get("applied_tags", []))
 
-    is_story = bool(applied_tags & story_tag_ids)
+        is_story = bool(applied_tags & story_tag_ids)
 
-    
+        print(
+            f"[3/4] ピックアップした話題: 「{thread_name}」 (ストーリー属性: {is_story})",
+            flush=True,
+        )
 
-    print(
-        f"[3/4] ピックアップした話題: 「{thread_name}」 (ストーリー属性: {is_story})",
-        flush=True,
-    )
+        # ★ 1件取得（get_thread_first_message）から、最大50件を取得する関数に変更
+        thread_messages = get_thread_recent_messages(thread_id, limit=50)
 
-    # ★ 1件取得（get_thread_first_message）から、最大50件を取得する関数に変更
-    thread_messages = get_thread_recent_messages(thread_id, limit=50)
-
-    # ★ タグに応じた個別指示（ストーリーか通常話題かで分岐）
-    if is_story:
-        corner_title = "📖 **【アロプラチャンネル！ストーリー思い出発掘コーナー】**"
-        topic_specific_rule = """・【話題タイプ】：ストーリー・シナリオ感想
+        # ★ タグに応じた個別指示（ストーリーか通常話題かで分岐）
+        if is_story:
+            corner_title = "📖 **【アロプラチャンネル！ストーリー思い出発掘コーナー】**"
+            topic_specific_rule = """・【話題タイプ】：ストーリー・シナリオ感想
 ・【ネタバレ方針】：ネタバレ全開OK！ストーリーの核心、黒幕や衝撃展開、名シーン、登場生徒の熱いセリフにしっかり踏み込んで語ってください。
 ・【会話展開の指針】：
   - アロナ：話題を切り出し、「まさかあの展開になるとは思いませんでしたよね！」のように熱く盛り上がる。
   - プラナ：作中の具体的展開や見どころ、伏線、生徒の活躍シーン（ネタバレ含む）を詳細に補足・深掘りする。
   - 締めくくり：「先生方はあのシーンの〜はどう思いましたか？」など具体的・核心的な場面を挙げてストーリー雑談を促す。"""
-    else:
-        corner_title = "🎉 **【アロプラチャンネル！プレイ＆イベント過去ログ発掘コーナー】**"
-        topic_specific_rule = """・【話題タイプ】：ゲームプレイ（ガチャ・攻略）、リアルイベント、コラボ、雑談など
+        else:
+            corner_title = "🎉 **【アロプラチャンネル！プレイ＆イベント過去ログ発掘コーナー】**"
+            topic_specific_rule = """・【話題タイプ】：ゲームプレイ（ガチャ・攻略）、リアルイベント、コラボ、雑談など
 ・【ネタバレ方針】：ネタバレ全開OK！雑談中に出たネタバレの話題も取り扱ってください。
 ・【会話展開の指針】：
   - アロナ：「先生！昔こんなイベントや話題で盛り上がっていましたよ！」と元気に切り出す。
   - プラナ：そのスレッドの話題（ガチャ・攻略報告、生放送やDJライブ・スタンプラリー等の思い出など）を冷静に補足する。
   - 締めくくり：「先生方も当時の思い出や現地での思い出はどうでしたか？」と過去ログへの書き込み・雑談を促す。"""
 
-    # ★ 共通プロンプト（他のBotと統一した構造）
-    prompt = f"""あなたは「ブルーアーカイブ」のアロナとプラナです。
+        # ★ 共通プロンプト（他のBotと統一した構造）
+        prompt = f"""あなたは「ブルーアーカイブ」のアロナとプラナです。
 Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの先生（メンバー）に向けて、過去にフォーラムで盛り上がった話題を1つピックアップして紹介し、雑談のきっかけを作ってください。
 
 ■ 入力データ
@@ -350,6 +348,8 @@ Discordサーバー「足跡の化石」のブルアカ雑談チャンネルの�
 **アロナ**: 「〜〜」
 **プラナ**: 「〜〜」
 """
+
+    # ここから先は共通の生成・投稿処理
     print(len(prompt))
     print("[4/4] Gemini APIによる紹介文生成を開始します...", flush=True)
     client = genai.Client(api_key=GEMINI_API_KEY)
