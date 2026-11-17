@@ -4,7 +4,6 @@ import time
 from google import genai
 import requests
 import concurrent.futures
-import concurrent.futures
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
