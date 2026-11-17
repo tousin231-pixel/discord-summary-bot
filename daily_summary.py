@@ -11,6 +11,10 @@ import requests
 
 import random
 
+import urllib.request
+import urllib.parse
+import xml.etree.ElementTree as ET
+
 # =========================================================
 # 1. 設定 & 定数管理
 # =========================================================
@@ -497,6 +501,44 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
     return logs_body.strip() or "過去24時間の新規投稿はありませんでした。"
 
 
+def fetch_google_news_topics(query="ブルーアーカイブ"):
+    """GoogleニュースのRSSから指定キーワードの最新トピックを取得する"""
+    print(f"  └ [Googleニュース取得] キーワード: '{query}' の最新情報を収集中...", flush=True)
+    encoded_query = urllib.parse.quote(query)
+    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ja&gl=JP&ceid=JP:ja"
+    
+    req_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    try:
+        req = urllib.request.Request(rss_url, headers=req_headers)
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as response:
+            xml_data = response.read()
+            
+        root = ET.fromstring(xml_data)
+        items = root.findall(".//item")
+        
+        news_list = []
+        for item in items[:15]: # 上位5件程度を抽出
+            title = item.find("text()", namespaces={}) or item.find("title")
+            title_text = title.text if title is not None else ""
+            pub_date = item.find("pubDate")
+            date_text = pub_date.text if pub_date is not None else ""
+            
+            if title_text:
+                news_list.append(f"・{title_text} ({date_text})")
+                
+        if news_list:
+            print(f"  └ [Googleニュース取得成功] {len(news_list)}件の記事を取得", flush=True)
+            return "\n".join(news_list)
+        return "直近の関連ニュースは見つかりませんでした。"
+    
+    except Exception as e:
+        print(f"  ⚠️ [Googleニュース取得エラー]: {e}", flush=True)
+        return "ニュースの取得に失敗しました。"
+
+
 # =========================================================
 # 4. Gemini API 呼び出し & Discord投稿
 # =========================================================
@@ -805,6 +847,14 @@ def main():
     today_student_birthday = get_today_bluearchive_birthdays()
     birthday_info_text = f"本日お誕生日の生徒: {today_student_birthday}ちゃん" if today_student_birthday else "本日お誕生日の生徒はいません。"
 
+    # 🆕 【Googleニュース連動】が選ばれた場合のみニュースをスクレイピング（RSS取得）する
+    dynamic_news_text = ""
+    if "Googleニュース連動" in selected_theme:
+        print("[2.5/6] Googleニュース連動テーマが選ばれたため、最新トピックを取得中...", flush=True)
+        dynamic_news_text = fetch_google_news_topics("ブルーアーカイブ")
+    else:
+        dynamic_news_text = "（今回は別のテーマが選択されています）"
+
     print("[3/6] 本日開催のイベント＆投票情報を取得中...", flush=True)
     event_text = fetch_guild_events(guild_id, now_utc)
     poll_text, poll_comments_text = fetch_polls(guild_id, yesterday_utc)
@@ -833,12 +883,14 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 ・【投票置き場の新着投票（過去24時間）】：{poll_text}
 ・【ブルアカ最新ゲーム内イベント情報】：{game_event_text}
 ・【挨拶の切り口】：{selected_theme}
+・【Googleニュース参考データ（※テーマに連動する場合のみ使用）】：{dynamic_news_text}
 
 ■ キャラクター設定とトーン
 ・ブルーアーカイブの「アロナ」として、元気で健気な言葉遣いを徹底してください。
 ・【冒頭の朝の挨拶ルール（重要）】：
   - 「寒いですね」「暑いですね」「暖かくして」「体調管理を」といった**気温・気候だけの定型挨拶は禁止**します。
   - 【挨拶の切り口】として与えられたテーマをベースに、アロナらしい一言を添えてください。
+  - 特に「Googleニュース連動」のテーマが選ばれている場合は、上記の【Googleニュース参考データ】から現実の話題を1つさりげなくピックアップし、「先生、現実の世界でもブルアカのこんなニュースがあるみたいですよ！」と朝の挨拶に楽しく絡めてください
   - もし【本日の誕生日】や【ゲーム内イベント】がある場合は、それと絡めてもOKです。
 ・メッセージの最後は、次の「会話要約編」の投稿を楽しみに行きたくなるような一言を添えてください。
 
