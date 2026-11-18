@@ -26,7 +26,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 # --- 調整可能なパラメータ・定数 ---
 # タイムアウト・リトライ設定
 HTTP_TIMEOUT = (6.0, 20.0)
-GEMINI_HTTP_TIMEOUT_MS = 60000  # Geminiクライアントのタイムアウト (ミリ秒)
+GEMINI_HTTP_TIMEOUT_MS = 90000  # Geminiクライアントのタイムアウト (ミリ秒)
 GEMINI_TOTAL_TIMEOUT_SEC = 600  # Gemini処理全体の制限時間 (秒)
 MAX_RETRIES_PER_MODEL = 3       # モデルごとの最大リトライ回数
 RETRY_WAIT_SEC = 5              # 503エラー時などのリトライ待機秒数
