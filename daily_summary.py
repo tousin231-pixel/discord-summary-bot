@@ -1,19 +1,16 @@
-import csv
 import builtins
+import csv
 from datetime import datetime, timedelta, timezone, UTC
 import os
+import random
 import re
 import time
+import urllib.parse
+import xml.etree.ElementTree as ET
 
 from bs4 import BeautifulSoup
 from google import genai
 import requests
-
-import random
-
-import urllib.request
-import urllib.parse
-import xml.etree.ElementTree as ET
 
 # =========================================================
 # 1. 設定 & 定数管理
@@ -91,17 +88,17 @@ HEAVY_GEMINI_MODELS = [
     "gemini-3.1-flash-lite",
 ]
 
-#["gemini-4-hydrogen","gemini-3.8-flash",]が桁違いに重いみたいなので注意
+# ["gemini-3.8-flash",]が桁違いに重いみたいなので注意
 
-#ランダムなテーマを設定
+# ランダムなテーマを設定
 greeting_themes = [
     "曜日の感覚（月曜の気合い、水曜の折り返し、金曜のワクワク感など）に触れる",
     "旬の食べ物や飲み物（温かいココア、焼き芋、季節のスイーツなど）を話題にする",
     "オタク・サブカル界隈の季節感（同人イベント・コミケ準備、アニメのクール切り替え、積みゲー消化など）に触れる",
     "朝の日常あるある（お布団の誘惑、目覚まし時計、通学・通勤の景色など）をアロナ視点で話す",
     "カレンダーの節目（今月の目標、給料日・ガチャ計画、週末の予定など）に絡める",
-    "今日は何の日？（その日付の有名な記念日や雑学があれば1つだけ豆知識として紹介する）"
-    "【Googleニュース連動】「ブルーアーカイブ」や現実のサブカル・ポップカルチャーに関する最新の現実のニュース・イベント（リアルイベントやコラボ等）を1つ取り上げ、朝の挨拶に自然に絡める"
+    "今日は何の日？（その日付の有名な記念日や雑学があれば1つだけ豆知識として紹介する）",
+    "【Googleニュース連動】「ブルーアーカイブ」や現実のサブカル・ポップカルチャーに関する最新の現実のニュース・イベント（リアルイベントやコラボ等）を1つ取り上げ、朝の挨拶に自然に絡める",
 ]
 
 selected_theme = random.choice(greeting_themes)
@@ -119,7 +116,7 @@ def get_now_jst():
 
 def print(*args, **kwargs):
     """printと同じ引数を受け取り、先頭に現在時刻(JST)を挿入して出力するラッパー関数"""
-    builtins.print(get_now_jst().strftime("[%H:%M:%S]"), end=' ')
+    builtins.print(get_now_jst().strftime("[%H:%M:%S]"), end=" ")
     builtins.print(*args, **kwargs)
 
 def fetch_discord_api(endpoint: str, method: str = "GET", payload: dict = None):
@@ -132,7 +129,7 @@ def fetch_discord_api(endpoint: str, method: str = "GET", payload: dict = None):
             res = requests.post(url, headers=DISCORD_HEADERS, json=payload, timeout=HTTP_TIMEOUT)
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
-        
+
         if res.status_code in [200, 201]:
             return res.json()
         print(f"⚠️ Discord API エラー [{res.status_code}]: {endpoint}", flush=True)
@@ -161,7 +158,7 @@ def safe_split_text(text: str, max_length: int = DISCORD_MAX_LENGTH) -> list[str
 
 
 # =========================================================
-# 3. データ収集モジュール (Wiki, CSV, Discord)
+# 3. データ収集モジュール (Wiki, CSV, Discord, News)
 # =========================================================
 
 def get_bluearchive_game_events():
@@ -297,7 +294,7 @@ def get_bluearchive_game_events():
 
 def get_today_bluearchive_birthdays(csv_path="birthday.csv"):
     """CSVから本日誕生日の生徒を取得"""
-    target_bday_str = get_now_jst().strftime('%-m/%-d')
+    target_bday_str = get_now_jst().strftime("%-m/%-d")
     print(f"[2/6] 誕生日データの確認中... (対象日付: '{target_bday_str}')", flush=True)
     birthday_students = []
     try:
@@ -410,12 +407,12 @@ def fetch_polls(guild_id: str, yesterday_utc: datetime):
     return poll_text, comments_text
 
 
-def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
-    """通常チャンネルおよびフォーラムの過去24時間メッセージを収集"""
-    collected_data = {}
+def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> tuple[str, str]:
+    """通常チャンネルおよびフォーラムの過去24時間メッセージを収集し、それぞれ返す"""
+    channel_data = {}
 
     for cat_name, channels in CHANNELS.items():
-        collected_data[cat_name] = {}
+        channel_data[cat_name] = {}
         for ch_id, ch_name in channels.items():
             messages = fetch_discord_api(f"channels/{ch_id}/messages?limit={CHANNEL_MESSAGE_LIMIT}")
             if not messages:
@@ -443,9 +440,25 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
                         ch_msgs.append(f"[{time_str}] {author}{ref_info}: {content}")
 
             if ch_msgs:
-                collected_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
+                channel_data[cat_name][f"<#{ch_id}> ({ch_name})"] = ch_msgs
 
-    collected_data["フォーラム"] = {}
+    channel_logs_body = ""
+    for cat_name, channels in channel_data.items():
+        if channels:
+            channel_logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
+            for ch_tag, msgs in channels.items():
+                authors = set(
+                    m.split("] ")[1].split(":")[0]
+                    for m in msgs
+                    if "] " in m and ":" in m.split("] ")[1]
+                )
+                channel_logs_body += f"--- {ch_tag} (投稿数: {len(msgs)}件 / 発言者数: {len(authors)}人) ---\n"
+                channel_logs_body += "\n".join(msgs) + "\n"
+
+    channel_logs_str = channel_logs_body.strip() or "過去24時間の新規投稿はありませんでした。"
+
+    # フォーラム用ログを独立して組み立て
+    forum_data = {}
     if guild_id:
         threads_data = fetch_discord_api(f"guilds/{guild_id}/threads/active")
         if threads_data:
@@ -484,60 +497,83 @@ def collect_chat_logs(guild_id: str, yesterday_utc: datetime) -> str:
 
                     if th_msgs:
                         prefix = "🆕 " if is_new_thread else ""
-                        collected_data["フォーラム"][f"{prefix}<#{th_id}> ({th_name})"] = th_msgs
+                        forum_data[f"{prefix}<#{th_id}> ({th_name})"] = th_msgs
 
-    logs_body = ""
-    for cat_name, channels in collected_data.items():
-        if channels:
-            logs_body += f"\n=== カテゴリ: {cat_name} ===\n"
-            for ch_tag, msgs in channels.items():
-                authors = set(
-                    m.split("] ")[1].split(":")[0]
-                    for m in msgs
-                    if "] " in m and ":" in m.split("] ")[1]
-                )
-                logs_body += f"--- {ch_tag} (投稿数: {len(msgs)}件 / 発言者数: {len(authors)}人) ---\n"
-                logs_body += "\n".join(msgs) + "\n"
+    forum_logs_body = ""
+    if forum_data:
+        for th_tag, msgs in forum_data.items():
+            authors = set(
+                m.split(":", 1)[0]
+                for m in msgs
+                if ":" in m
+            )
+            forum_logs_body += f"--- {th_tag} (投稿数: {len(msgs)}件 / 発言者数: {len(authors)}人) ---\n"
+            forum_logs_body += "\n".join(msgs) + "\n"
 
-    return logs_body.strip() or "過去24時間の新規投稿はありませんでした。"
+    forum_logs_str = forum_logs_body.strip() or "過去24時間のフォーラム新規投稿はありませんでした。"
+
+    return channel_logs_str, forum_logs_str
 
 
-def fetch_google_news_topics(query="ブルーアーカイブ"):
-    """GoogleニュースのRSSから指定キーワードの最新トピックを取得する"""
-    print(f"  └ [Googleニュース取得] キーワード: '{query}' の最新情報を収集中...", flush=True)
-    encoded_query = urllib.parse.quote(query)
-    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ja&gl=JP&ceid=JP:ja"
-    
+def fetch_google_news_topics(queries: list[str] | str = None) -> tuple[str, bool]:
+    """GoogleニュースのRSSから最新トピックを取得する。戻り値: (テキスト, 取得成功フラグ)"""
+    if queries is None:
+        query_list = ["ブルーアーカイブ", "アニメ イベント コラボ"]
+    elif isinstance(queries, str):
+        query_list = [queries]
+    else:
+        query_list = list(queries)
+
     req_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+        "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
     }
-    
-    try:
-        req = urllib.request.Request(rss_url, headers=req_headers)
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as response:
-            xml_data = response.read()
-            
-        root = ET.fromstring(xml_data)
-        items = root.findall(".//item")
-        
-        news_list = []
-        for item in items[:15]: # 上位15件程度を抽出
-            title = item.find("text()", namespaces={}) or item.find("title")
-            title_text = title.text if title is not None else ""
-            pub_date = item.find("pubDate")
-            date_text = pub_date.text if pub_date is not None else ""
-            
-            if title_text:
-                news_list.append(f"・{title_text} ({date_text})")
-                
-        if news_list:
-            print(f"  └ [Googleニュース取得成功] {len(news_list)}件の記事を取得", flush=True)
-            return "\n".join(news_list)
-        return "直近の関連ニュースは見つかりませんでした。"
-    
-    except Exception as e:
-        print(f"  ⚠️ [Googleニュース取得エラー]: {e}", flush=True)
-        return "ニュースの取得に失敗しました。"
+
+    all_news = []
+
+    for q in query_list:
+        print(f"  └ [Googleニュース取得] キーワード: '{q}' の最新情報を収集中...", flush=True)
+        encoded_query = urllib.parse.quote(q)
+        rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ja&gl=JP&ceid=JP:ja"
+
+        try:
+            res = requests.get(rss_url, headers=req_headers, timeout=HTTP_TIMEOUT)
+            if res.status_code != 200:
+                print(f"  ⚠️ [Googleニュース取得] ステータスコード異常 ({q}): {res.status_code}", flush=True)
+                continue
+
+            root = ET.fromstring(res.content)
+            items = root.findall(".//item")
+
+            count_for_q = 0
+            for item in items[:10]:
+                title_elem = item.find("title")
+                pub_elem = item.find("pubDate")
+                title_text = (title_elem.text or "").strip() if title_elem is not None else ""
+                date_text = (pub_elem.text or "").strip() if pub_elem is not None else ""
+
+                if title_text:
+                    all_news.append(f"・[{q}] {title_text} ({date_text})")
+                    count_for_q += 1
+
+            print(f"    └ '{q}' から {count_for_q} 件抽出", flush=True)
+
+        except Exception as e:
+            print(f"  ⚠️ [Googleニュース取得エラー] ({q}): {e}", flush=True)
+            continue
+
+    if all_news:
+        random.shuffle(all_news)
+        selected_news = all_news[:12]
+        print(f"  └ [Googleニュース取得成功] 合計 {len(selected_news)} 件を選定", flush=True)
+        return "\n".join(selected_news), True
+
+    print("  ⚠️ [Googleニュース取得] 全キーワードで記事を取得できませんでした。", flush=True)
+    return "（ニュースデータ取得不可：別の切り口で挨拶してください）", False
 
 
 # =========================================================
@@ -572,10 +608,10 @@ def generate_and_post(
         for attempt in range(1, MAX_RETRIES_PER_MODEL + 1):
             try:
                 start = time.time()
-                
+
                 response = client.models.generate_content(
                     model=model_name,
-                    contents=prompt_text
+                    contents=prompt_text,
                 )
 
                 elapsed = time.time() - start
@@ -620,8 +656,8 @@ def generate_and_post(
             f"channels/{target_ch_id}/messages",
             method="POST",
             payload={
-                "content": summary_text
-            }
+                "content": summary_text,
+            },
         )
 
         print(f"❌ [{part_title}] すべてのモデル・リトライで生成失敗", flush=True)
@@ -637,7 +673,7 @@ def generate_and_post(
 
     chunks = safe_split_text(
         summary_text,
-        max_length=DISCORD_MAX_LENGTH
+        max_length=DISCORD_MAX_LENGTH,
     )
 
     for chunk in chunks:
@@ -645,8 +681,8 @@ def generate_and_post(
             f"channels/{target_ch_id}/messages",
             method="POST",
             payload={
-                "content": chunk
-            }
+                "content": chunk,
+            },
         )
 
         if not result:
@@ -757,7 +793,7 @@ def process_reminders(client: genai.Client, info_summary_text: str, logs_body: s
 def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: bool) -> str:
     """リマインド用プロンプトの構築"""
     ch_label = "バトル系専用チャンネル" if is_battle else "ブルアカ雑談チャンネル"
-    
+
     specific_instruction = ""
     if is_battle:
         specific_instruction = """1. 【タイミング別メッセージ】
@@ -843,32 +879,45 @@ def main():
     now_jst = get_now_jst()
     weekday_str = "月火水木金土日"[now_jst.weekday()]
     date_context = f"{now_jst.strftime('%Y年%-m月%-d日')}（{weekday_str}曜日）"
-    
+
     game_event_text, parsed_events_list = get_bluearchive_game_events()
     today_student_birthday = get_today_bluearchive_birthdays()
     birthday_info_text = f"本日お誕生日の生徒: {today_student_birthday}ちゃん" if today_student_birthday else "本日お誕生日の生徒はいません。"
 
-    # 🆕 【Googleニュース連動】が選ばれた場合のみニュースをスクレイピング（RSS取得）する
-    dynamic_news_text = ""
+    # 【Googleニュース連動】が選ばれた場合のみニュースRSSを取得
+    news_ok = False
     if "Googleニュース連動" in selected_theme:
         print("[2.5/6] Googleニュース連動テーマが選ばれたため、最新トピックを取得中...", flush=True)
-        dynamic_news_text = fetch_google_news_topics("ブルーアーカイブ")
+        dynamic_news_text, news_ok = fetch_google_news_topics(["ブルーアーカイブ", "ブルアカ"])
     else:
         dynamic_news_text = "（今回は別のテーマが選択されています）"
+
+    news_instruction = ""
+    if "Googleニュース連動" in selected_theme:
+        if news_ok:
+            news_instruction = (
+                "・【Googleニュース連動】のテーマが選ばれています。上記の【Googleニュース参考データ】から現実の話題を1つさりげなくピックアップし、"
+                "「先生、現実の世界でもこんなニュースがあるみたいですよ！」と朝の挨拶に楽しく絡めてください。"
+            )
+        else:
+            news_instruction = (
+                "・今回はニュースデータの取得ができなかったことをアロナらしく報告しつつ、"
+                "今日の曜日やアロナらしい朝の元気な挨拶で自然に始めてください。"
+            )
 
     print("[3/6] 本日開催のイベント＆投票情報を取得中...", flush=True)
     event_text = fetch_guild_events(guild_id, now_utc)
     poll_text, poll_comments_text = fetch_polls(guild_id, yesterday_utc)
 
     print("[4/6] 過去24時間のチャットログを収集・整形中...", flush=True)
-    logs_body = collect_chat_logs(guild_id, yesterday_utc)
+    channel_logs_body, forum_logs_body = collect_chat_logs(guild_id, yesterday_utc)
+    combined_logs_for_reminder = f"{channel_logs_body}\n\n{forum_logs_body}".strip()
 
     print("[5/6] Gemini APIによる要約を作成・投稿中...", flush=True)
-    
-    # 定数からGeminiクライアントを作成
+
     client = genai.Client(
         api_key=GEMINI_API_KEY,
-        http_options={"timeout": GEMINI_HTTP_TIMEOUT_MS}
+        http_options={"timeout": GEMINI_HTTP_TIMEOUT_MS},
     )
 
     # プロンプト作成 (お知らせ編)
@@ -891,7 +940,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 ・【冒頭の朝の挨拶ルール（重要）】：
   - 「寒いですね」「暑いですね」「暖かくして」「体調管理を」といった**気温・気候だけの定型挨拶は禁止**します。
   - 【挨拶の切り口】として与えられたテーマをベースに、アロナらしい一言を添えてください。
-  - 特に「Googleニュース連動」のテーマが選ばれている場合は、上記の【Googleニュース参考データ】から現実の話題を1つさりげなくピックアップし、「先生、現実の世界でもブルアカのこんなニュースがあるみたいですよ！」と朝の挨拶に楽しく絡めてください
+  {news_instruction}
   - もし【本日の誕生日】や【ゲーム内イベント】がある場合は、それと絡めてもOKです。
 ・メッセージの最後は、次の「会話要約編」の投稿を楽しみに行きたくなるような一言を添えてください。
 
@@ -928,7 +977,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
     prompt_chat = f"""
 あなたは「ブルーアーカイブ」の「アロナ」です。
 Discordサーバー「足跡の化石」の先生たちに向けて
-以下の【会話ログ】を元に、昨日の先生たちの盛り上がりをまとめた【会話要約編】を作成してください。
+以下の【通常チャンネルの会話ログ】と【フォーラムの会話ログ】を元に、昨日の先生たちの盛り上がりをまとめた【会話要約編】を作成してください。
 
 ■ 今日の日付データ（参考用）
 ・【今日の日付】：{date_context} 
@@ -944,8 +993,12 @@ Discordサーバー「足跡の化石」の先生たちに向けて
   - 1便目（お知らせ編）ですでに日付や朝の挨拶をしているため、**2便目の締めくくりで「今日は〇月〇日〜」と再び日付から話し始めるのは厳禁**です。
   - 気温や天気だけの挨拶も避けてください。
   - 昨日の【会話ログ】で盛り上がった話題や楽しかった空気感の余韻をそのまま受け継ぎ、「今日も先生たちのお仕事や日常が素敵なものになりますように！」といった**自然なエール・応援メッセージのみ**でスッキリと締めくくってください。
+
 ■ 出力・フォーマットルール
-・同じチャンネル（<#ID>）を要約内で2度以上登場させないでください。
+・同じチャンネル・スレッド（<#ID>）を要約内で2度以上登場させないでください。
+・【通常チャンネルの会話ログ】にある話題は「シャーレ談話室」「争いの足跡」に分類してください。
+・【フォーラムの会話ログ】にある話題は必ず「💬 **カテゴリ：フォーラム**」の下にまとめてください。フォーラムのスレッドを他のカテゴリに混ぜないでください。
+・【フォーラムの会話ログ】に新規投稿がない場合は、「💬 **カテゴリ：フォーラム**」の下に「過去24時間のフォーラム新規投稿はありませんでした。」と記載してください。
 ・新スレッド（ログ内で 🆕 マーク付）は頭に 🆕 を付けて出力してください。
 
 【出力フォーマット】
@@ -953,36 +1006,39 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 
 ☕ **カテゴリ：シャーレ談話室**
 - <#1376909055091671071>
-  - 【会話ログ】に基づいた話題1
+  - 【通常チャンネルの会話ログ】に基づいた話題1
 
 ⚔️ **カテゴリ：争いの足跡**
 - <#1379058754716307516>
-  - 【会話ログ】に基づいた話題1
+  - 【通常チャンネルの会話ログ】に基づいた話題1
 
 💬 **カテゴリ：フォーラム**
 - <#スレッドID>
-  - 【会話ログ】に基づいた話題1
+  - 【フォーラムの会話ログ】に基づいた話題1
 ---
 （アロナから朝の締めくくり挨拶）
 
-【会話ログ】
-{logs_body}
+【通常チャンネルの会話ログ】
+{channel_logs_body}
+
+【フォーラムの会話ログ】
+{forum_logs_body}
 """
 
     # 文字数の出力
     print("お知らせ編", len(prompt_info), "要約編", len(prompt_chat))
-    
+
     info_res = generate_and_post(
         client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS,
     )
     time.sleep(BETWEEN_MESSAGES_SLEEP_SEC)
-    
+
     generate_and_post(
-        client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS
+        client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS,
     )
 
     print("[6/6] イベントリマインド判定処理を開始...", flush=True)
-    process_reminders(client, info_res, logs_body, parsed_events_list)
+    process_reminders(client, info_res, combined_logs_for_reminder, parsed_events_list)
 
     print("🎉 すべての処理が正常に完了しました！", flush=True)
 
@@ -993,5 +1049,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(
             f"致命的エラー : {e}",
-            flush=True
+            flush=True,
         )
