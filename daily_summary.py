@@ -653,9 +653,10 @@ def generate_and_post(
 
     if not summary_text:
         summary_text = (
-            "⚠️ Gemini APIの混雑または障害により\n"
-            "本日の要約生成はスキップされました。\n\n"
-            "次回実行をお待ちください。"
+            "……あ、あれっ！？\n"
+            "いま通信回線がすっごく混み合っているみたいで、\n\n"
+            "まとめがうまく作れませんでした……！\n\n"
+            "ごめんなさいっ！ 次回の実行までお待ちくださいね！"
         )
 
         fetch_discord_api(
