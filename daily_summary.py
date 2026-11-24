@@ -628,16 +628,22 @@ def generate_and_post(
                     print(f"    └ ⚠ タイムアウト ({timeout_sec}秒超過) [{model_name}] 試行 {attempt}/{MAX_RETRIES_PER_MODEL}", flush=True)
                 elif "503" in err or "UNAVAILABLE" in err or "high demand" in err:
                     if attempt < MAX_RETRIES_PER_MODEL:
-                        print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → {RETRY_WAIT_SEC}秒後にリトライ ({attempt}/{MAX_RETRIES_PER_MODEL})", flush=True)
-                        time.sleep(RETRY_WAIT_SEC)
+                        wait_sec = min(RETRY_WAIT_SEC * (2 ** (attempt - 1)), 60) + random.uniform(0, 2)
+                        print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → {wait_sec:.1f}秒後にリトライ ({attempt}/{MAX_RETRIES_PER_MODEL})", flush=True)
+                        time.sleep(wait_sec)
                         continue
                     else:
                         print(f"    └ ⚠ 503混雑エラー検知 [{model_name}] → 最大リトライ回数に達したため次モデルへ切替", flush=True)
                         break
                 elif "429" in err or "RESOURCE_EXHAUSTED" in err:
-                    print(f"    └ ⚠ RateLimit発生 [{model_name}] {RATE_LIMIT_WAIT_SEC}秒待機", flush=True)
-                    time.sleep(RATE_LIMIT_WAIT_SEC)
-                    continue
+                    if attempt < MAX_RETRIES_PER_MODEL:
+                        wait_sec = min(RATE_LIMIT_WAIT_SEC * (2 ** (attempt - 1)), 90) + random.uniform(0, 3)
+                        print(f"    └ ⚠ RateLimit発生 [{model_name}] → {wait_sec:.1f}秒後にリトライ ({attempt}/{MAX_RETRIES_PER_MODEL})", flush=True)
+                        time.sleep(wait_sec)
+                        continue
+                    else:
+                        print(f"    └ ⚠ RateLimit発生 [{model_name}] → 最大リトライ回数に達したため次モデルへ切替", flush=True)
+                        break
                 else:
                     print(f"    └ ❌ 試行 {attempt}/{MAX_RETRIES_PER_MODEL} 失敗 ({model_name}) : {e}", flush=True)
                     time.sleep(3)
