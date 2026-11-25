@@ -637,7 +637,7 @@ def generate_and_post(
     prompt_text: str,
     target_ch_id: str,
     part_title: str,
-    append_footer: bool = True,
+    append_footer: bool = True,ef process_reminders
     timeout_sec: int = GEMINI_HTTP_TIMEOUT_MS // 1000,
     models_list: list[str] = None,
 ) -> str:
@@ -755,7 +755,13 @@ def generate_and_post(
 # 5. リマインド判定モジュール
 # =========================================================
 
-def process_reminders(client: genai.Client, info_summary_text: str, logs_body: str, parsed_events_list: list):
+def process_reminders(
+    client: genai.Client,
+    guild_id: str,
+    info_summary_text: str,
+    logs_body: str,
+    parsed_events_list: list,
+):
     """イベント期限のリマインド判定を行い投稿"""
     today_date = get_now_jst().date()
     remind_targets = []
@@ -824,18 +830,23 @@ def process_reminders(client: genai.Client, info_summary_text: str, logs_body: s
             target_ch = TALK_CHANNEL_ID
             is_battle = False
 
-        # process_reminders 内のループ処理
-        matched_thread = None
+       matched_thread = None
         if not is_battle:
             matched_thread = find_matching_forum_thread(guild_id, raw)
             if matched_thread:
-                print(f"    └ [フォーラム連携] 該当スレッド発見: {matched_thread['name']} ({matched_thread['mention']})", flush=True)
+                print(
+                    f"    └ [フォーラム連携] 該当スレッド発見: {matched_thread['name']} ({matched_thread['mention']})",
+                    flush=True,
+                )
 
-        prompt_remind = build_remind_prompt(raw, remind_type, logs_body, is_battle, matched_thread)
-
-        prompt_remind = build_remind_prompt(raw, remind_type, logs_body, is_battle)
+        prompt_remind = build_remind_prompt(
+            raw, remind_type, logs_body, is_battle, matched_thread
+        )
         category_label = "バトル" if is_battle else "イベント"
-        print(f"  └ [リマインド送信] {category_label}系 ({raw}): {remind_type} -> Channel: {target_ch}", flush=True)
+        print(
+            f"  └ [リマインド送信] {category_label}系 ({raw}): {remind_type} -> Channel: {target_ch}",
+            flush=True,
+        )
 
         generate_and_post(
             client,
@@ -846,7 +857,13 @@ def process_reminders(client: genai.Client, info_summary_text: str, logs_body: s
         )
         
 
-def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: bool) -> str:
+def build_remind_prompt(
+    raw: str,
+    remind_type: str,
+    logs_body: str,
+    is_battle: bool,
+    matched_thread: dict | None = None,
+) -> str:
     """リマインド用プロンプトの構築"""
     ch_label = "バトル系専用チャンネル" if is_battle else "ブルアカ雑談チャンネル"
 
@@ -869,15 +886,14 @@ def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: b
    ・会話ログ内に【対象イベント】に関する話題（ストーリー感想、チャレンジステージ、ガチャ・ピックアップ、ショップのオーパーツなど）がある場合：
      「先生方は〇〇のストーリーやチャレンジで盛り上がっていましたね！」「〇〇の交換を済ませた先生もいらっしゃるみたいです」のように具体的に触れてください。
    ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・呼びかけに留めてください。"""
-
-    forum_instruction = ""
+forum_instruction = ""
     if matched_thread:
         forum_instruction = f"""
 3. 【フォーラム感想スレッドへの誘導（必須）】
    ・このイベントには既存の感想・実況スレッドがあります：{matched_thread['mention']}（スレッド名：{matched_thread['name']}）
    ・会話の自然な流れの中で、必ず `{matched_thread['mention']}` のメンションリンクを含めつつ、「イベントが終わる前にストーリーの感想や思い出を語りませんか？」と先生たちに呼びかけてください。"""
+
     return f"""
-    
 あなたは「ブルーアーカイブ」の「アロナ」と「プラナ」です。
 Discordサーバー「足跡の化石」の{ch_label}の先生（メンバー）に向けて、対象コンテンツのリマインドメッセージを作成してください。
 
@@ -895,6 +911,7 @@ Discordサーバー「足跡の化石」の{ch_label}の先生（メンバー）
 
 ■ 進行・会話展開ルール
 {specific_instruction}
+{forum_instruction}
 
 3. 【テンポと会話量（重要）】
    ・1回の発言は【最大60〜80文字程度】に抑え、長文にならないようコンパクトにまとめてください。
@@ -1100,8 +1117,10 @@ Discordサーバー「足跡の化石」の先生たちに向けて
         client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS,
     )
 
-    print("[6/6] イベントリマインド判定処理を開始...", flush=True)
-    process_reminders(client, info_res, combined_logs_for_reminder, parsed_events_list)
+   print("[6/6] イベントリマインド判定処理を開始...", flush=True)
+    process_reminders(
+        client, guild_id, info_res, combined_logs_for_reminder, parsed_events_list
+    )
 
     print("🎉 すべての処理が正常に完了しました！", flush=True)
 
