@@ -575,6 +575,58 @@ def fetch_google_news_topics(queries: list[str] | str = None) -> tuple[str, bool
     print("  ⚠️ [Googleニュース取得] 全キーワードで記事を取得できませんでした。", flush=True)
     return "（ニュースデータ取得不可：別の切り口で挨拶してください）", False
 
+def normalize_event_title(text: str) -> str:
+    """イベント名・スレッド名の表記揺れ（【復刻】や波ダッシュ、空白など）を吸収して正規化"""
+    text = re.sub(r"\d{1,2}/\d{1,2}.*$", "", text)
+    text = re.sub(r"【復刻】|\[復刻\]", "", text)
+    text = re.sub(r"[～〜~\s ・：:「」『』【】()（）]", "", text)
+    return text.strip()
+
+
+def find_matching_forum_thread(guild_id: str, event_raw_text: str) -> dict | None:
+    """アクティブおよびアーカイブ済みのフォーラムスレッドから対象イベントのスレッドを検索"""
+    if not guild_id:
+        return None
+
+    target_norm = normalize_event_title(event_raw_text)
+    if len(target_norm) < 4:
+        return None
+
+    candidates = []
+
+    # 1. アクティブなスレッドから対象フォーラムのものを取得
+    active_data = fetch_discord_api(f"guilds/{guild_id}/threads/active")
+    if active_data:
+        for th in active_data.get("threads", []):
+            if th.get("parent_id") == FORUM_CHANNEL_ID:
+                candidates.append(th)
+
+    # 2. アーカイブ済みの公開スレッドを取得（過去の初回開催時のスレッドも拾うため）
+    archived_data = fetch_discord_api(f"channels/{FORUM_CHANNEL_ID}/threads/archived/public?limit=100")
+    if archived_data:
+        candidates.extend(archived_data.get("threads", []))
+
+    # 重複排除しつつタイトル照合
+    seen_ids = set()
+    for th in candidates:
+        th_id = th.get("id")
+        if not th_id or th_id in seen_ids:
+            continue
+        seen_ids.add(th_id)
+
+        th_name = th.get("name", "")
+        th_norm = normalize_event_title(th_name)
+
+        if target_norm in th_norm or (len(th_norm) >= 6 and th_norm in target_norm):
+            return {
+                "id": th_id,
+                "name": th_name,
+                "mention": f"<#{th_id}>",
+                "archived": th.get("thread_metadata", {}).get("archived", False),
+            }
+
+    return None
+
 
 # =========================================================
 # 4. Gemini API 呼び出し & Discord投稿
@@ -772,6 +824,15 @@ def process_reminders(client: genai.Client, info_summary_text: str, logs_body: s
             target_ch = TALK_CHANNEL_ID
             is_battle = False
 
+        # process_reminders 内のループ処理
+        matched_thread = None
+        if not is_battle:
+            matched_thread = find_matching_forum_thread(guild_id, raw)
+            if matched_thread:
+                print(f"    └ [フォーラム連携] 該当スレッド発見: {matched_thread['name']} ({matched_thread['mention']})", flush=True)
+
+        prompt_remind = build_remind_prompt(raw, remind_type, logs_body, is_battle, matched_thread)
+
         prompt_remind = build_remind_prompt(raw, remind_type, logs_body, is_battle)
         category_label = "バトル" if is_battle else "イベント"
         print(f"  └ [リマインド送信] {category_label}系 ({raw}): {remind_type} -> Channel: {target_ch}", flush=True)
@@ -809,7 +870,14 @@ def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: b
      「先生方は〇〇のストーリーやチャレンジで盛り上がっていましたね！」「〇〇の交換を済ませた先生もいらっしゃるみたいです」のように具体的に触れてください。
    ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・呼びかけに留めてください。"""
 
+    forum_instruction = ""
+    if matched_thread:
+        forum_instruction = f"""
+3. 【フォーラム感想スレッドへの誘導（必須）】
+   ・このイベントには既存の感想・実況スレッドがあります：{matched_thread['mention']}（スレッド名：{matched_thread['name']}）
+   ・会話の自然な流れの中で、必ず `{matched_thread['mention']}` のメンションリンクを含めつつ、「イベントが終わる前にストーリーの感想や思い出を語りませんか？」と先生たちに呼びかけてください。"""
     return f"""
+    
 あなたは「ブルーアーカイブ」の「アロナ」と「プラナ」です。
 Discordサーバー「足跡の化石」の{ch_label}の先生（メンバー）に向けて、対象コンテンツのリマインドメッセージを作成してください。
 
