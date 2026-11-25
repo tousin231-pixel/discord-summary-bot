@@ -705,10 +705,6 @@ def generate_and_post(
 
 def process_reminders(client: genai.Client, info_summary_text: str, logs_body: str, parsed_events_list: list):
     """イベント期限のリマインド判定を行い投稿"""
-    if not info_summary_text:
-        print("  └ [リマインド確認] 1便目の要約テキストが取得できなかったためスキップします。", flush=True)
-        return
-
     today_date = get_now_jst().date()
     remind_targets = []
 
@@ -719,21 +715,14 @@ def process_reminders(client: genai.Client, info_summary_text: str, logs_body: s
         start_dt = item["start_dt"]
         end_dt = item["end_dt"]
 
-        if not end_dt:
-            continue
-
         event_name_clean = re.sub(r"\d{1,2}/\d{1,2}.*$", "", raw).strip()
-        event_keywords = [
-            re.sub(r"[【】「」・\s]", "", k)
-            for k in re.split(r"[\s・]", event_name_clean)
-            if len(k) >= 2
-        ]
 
-        is_in_summary = any(kw in info_summary_text for kw in event_keywords)
-        if not is_in_summary:
-            print(f"    ・[{event_name_clean[:15]}] スキップ: 要約内に該当文字列なし", flush=True)
+        # 日付がパースできなかった場合もログに出して可視化する
+        if not end_dt:
+            print(f"    ・[{event_name_clean[:15]}] スキップ: 終了日時が取得できず (raw: {raw[:40]})", flush=True)
             continue
 
+        # 1便目の要約テキスト依存（is_in_summary）は廃止し、日付のみで判定する
         remind_type = None
         end_date = end_dt.date()
         last_day_remind_date = end_date - timedelta(days=1)
@@ -794,7 +783,7 @@ def process_reminders(client: genai.Client, info_summary_text: str, logs_body: s
             f"リマインド({category_label}-{remind_type})",
             models_list=LIGHT_GEMINI_MODELS,
         )
-
+        
 
 def build_remind_prompt(raw: str, remind_type: str, logs_body: str, is_battle: bool) -> str:
     """リマインド用プロンプトの構築"""
