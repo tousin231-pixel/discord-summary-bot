@@ -637,7 +637,7 @@ def generate_and_post(
     prompt_text: str,
     target_ch_id: str,
     part_title: str,
-    append_footer: bool = True,ef process_reminders
+    append_footer: bool = True,
     timeout_sec: int = GEMINI_HTTP_TIMEOUT_MS // 1000,
     models_list: list[str] = None,
 ) -> str:
@@ -830,7 +830,7 @@ def process_reminders(
             target_ch = TALK_CHANNEL_ID
             is_battle = False
 
-       matched_thread = None
+        matched_thread = None
         if not is_battle:
             matched_thread = find_matching_forum_thread(guild_id, raw)
             if matched_thread:
@@ -886,7 +886,7 @@ def build_remind_prompt(
    ・会話ログ内に【対象イベント】に関する話題（ストーリー感想、チャレンジステージ、ガチャ・ピックアップ、ショップのオーパーツなど）がある場合：
      「先生方は〇〇のストーリーやチャレンジで盛り上がっていましたね！」「〇〇の交換を済ませた先生もいらっしゃるみたいです」のように具体的に触れてください。
    ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・呼びかけに留めてください。"""
-forum_instruction = ""
+        forum_instruction = ""
     if matched_thread:
         forum_instruction = f"""
 3. 【フォーラム感想スレッドへの誘導（必須）】
@@ -1117,7 +1117,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
         client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS,
     )
 
-   print("[6/6] イベントリマインド判定処理を開始...", flush=True)
+    print("[6/6] イベントリマインド判定処理を開始...", flush=True)
     process_reminders(
         client, guild_id, info_res, combined_logs_for_reminder, parsed_events_list
     )
