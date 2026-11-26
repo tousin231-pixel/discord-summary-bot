@@ -16,6 +16,10 @@ import requests
 # 1. 設定 & 定数管理
 # =========================================================
 
+# テストモード切替（True: テスト用フォーラムスレッドに投稿 / False: 本番チャンネルに投稿）
+TEST_MODE = True
+TEST_THREAD_ID = "1575340316632944714"  # テスト用フォーラムスレッドID
+
 # 環境変数
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -47,7 +51,8 @@ DISCORD_HEADERS = {
 }
 
 # Discord チャンネルID定義
-TARGET_CHANNEL_ID = "1552352658445181059"  # デイリー要約
+TARGET_CHANNEL_ID = "1552352658445181059"  # デイリー要約（本番）
+ACTIVE_TARGET_CHANNEL_ID = TEST_THREAD_ID if TEST_MODE else TARGET_CHANNEL_ID
 POLL_CHANNEL_ID = "1526389409841152150"    # 投票置き場
 FORUM_CHANNEL_ID = "1419978214394167296"   # フォーラム親ID
 TALK_CHANNEL_ID = "1376909055091671071"    # ブルアカ雑談 (リマインド用)
@@ -103,8 +108,6 @@ greeting_themes = [
 
 selected_theme = random.choice(greeting_themes)
 print(f"  └ [朝のテーマ選定] {selected_theme}", flush=True)
-
-
 
 
 # タイムゾーン定義
@@ -726,11 +729,12 @@ def generate_and_post(
         return summary_text
 
     if used_model and append_footer:
+        mode_label = " [TEST MODE]" if TEST_MODE else ""
         summary_text += (
             f"\n\n"
             f"*※ この要約は "
             f"`{used_model}` "
-            f"で作成されました。*"
+            f"で作成されました。{mode_label}*"
         )
 
     chunks = safe_split_text(
@@ -834,6 +838,9 @@ def process_reminders(
             target_ch = TALK_CHANNEL_ID
             is_battle = False
 
+        if TEST_MODE:
+            target_ch = ACTIVE_TARGET_CHANNEL_ID
+
         matched_thread = None
         if not is_battle:
             matched_thread = find_matching_forum_thread(guild_id, raw)
@@ -859,7 +866,7 @@ def process_reminders(
             f"リマインド({category_label}-{remind_type})",
             models_list=LIGHT_GEMINI_MODELS,
         )
-        
+
 
 def build_remind_prompt(
     raw: str,
@@ -890,7 +897,8 @@ def build_remind_prompt(
    ・会話ログ内に【対象イベント】に関する話題（ストーリー感想、チャレンジステージ、ガチャ・ピックアップ、ショップのオーパーツなど）がある場合：
      「先生方は〇〇のストーリーやチャレンジで盛り上がっていましたね！」「〇〇の交換を済ませた先生もいらっしゃるみたいです」のように具体的に触れてください。
    ・会話ログに該当する話題が無い場合：無理に捏造せず、一般的な応援・呼びかけに留めてください。"""
-        forum_instruction = ""
+
+    forum_instruction = ""
     if matched_thread:
         forum_instruction = f"""
 3. 【フォーラム感想スレッドへの誘導（必須）】
@@ -946,7 +954,7 @@ Discordサーバー「足跡の化石」の{ch_label}の先生（メンバー）
 # =========================================================
 
 def main():
-    print("[1/6] 環境変数と初期設定のチェック...", flush=True)
+    print(f"[1/6] 環境変数と初期設定のチェック... (TEST_MODE={TEST_MODE}, 投稿先={ACTIVE_TARGET_CHANNEL_ID})", flush=True)
     if not DISCORD_BOT_TOKEN or not GEMINI_API_KEY:
         print("❌ エラー: DISCORD_BOT_TOKEN または GEMINI_API_KEY が設定されていません。")
         return
@@ -955,7 +963,7 @@ def main():
     yesterday_utc = now_utc - timedelta(days=1)
 
     guild_id = None
-    ch_info = fetch_discord_api(f"channels/{TARGET_CHANNEL_ID}")
+    ch_info = fetch_discord_api(f"channels/{ACTIVE_TARGET_CHANNEL_ID}")
     if ch_info:
         guild_id = ch_info.get("guild_id")
 
@@ -1063,7 +1071,7 @@ Discordサーバー「足跡の化石」の先生たちに向けて
 以下の【通常チャンネルの会話ログ】と【フォーラムの会話ログ】を元に、昨日の先生たちの盛り上がりをまとめた【会話要約編】を作成してください。
 
 ■ 今日の日付データ（参考用）
-・【今日の日付】：{date_context} 
+・【今日の日付】：{date_context}
 
 ■ コミュニティ前提ルール（厳格適用）
 ・ネタバレOK・歓迎のサーバーです。
@@ -1112,12 +1120,12 @@ Discordサーバー「足跡の化石」の先生たちに向けて
     print("お知らせ編", len(prompt_info), "要約編", len(prompt_chat))
 
     info_res = generate_and_post(
-        client, prompt_info, TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS,
+        client, prompt_info, ACTIVE_TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS,
     )
     time.sleep(BETWEEN_MESSAGES_SLEEP_SEC)
 
     generate_and_post(
-        client, prompt_chat, TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS,
+        client, prompt_chat, ACTIVE_TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS,
     )
 
     print("[6/6] イベントリマインド判定処理を開始...", flush=True)
