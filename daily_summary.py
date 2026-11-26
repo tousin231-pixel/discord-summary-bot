@@ -1119,15 +1119,17 @@ Discordサーバー「足跡の化石」の先生たちに向けて
     # 文字数の出力
     print("お知らせ編", len(prompt_info), "要約編", len(prompt_chat))
 
+    active_models = LIGHT_GEMINI_MODELS if TEST_MODE else HEAVY_GEMINI_MODELS
+
     info_res = generate_and_post(
-        client, prompt_info, ACTIVE_TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=HEAVY_GEMINI_MODELS,
+        client, prompt_info, ACTIVE_TARGET_CHANNEL_ID, "1便目:お知らせ", models_list=active_models,
     )
     time.sleep(BETWEEN_MESSAGES_SLEEP_SEC)
-
+    
     generate_and_post(
-        client, prompt_chat, ACTIVE_TARGET_CHANNEL_ID, "2便目:会話要約", models_list=HEAVY_GEMINI_MODELS,
+        client, prompt_chat, ACTIVE_TARGET_CHANNEL_ID, "2便目:会話要約", models_list=active_models,
     )
-
+    
     print("[6/6] イベントリマインド判定処理を開始...", flush=True)
     process_reminders(
         client, guild_id, info_res, combined_logs_for_reminder, parsed_events_list
