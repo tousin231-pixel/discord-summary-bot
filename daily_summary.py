@@ -102,6 +102,10 @@ greeting_themes = [
 ]
 
 selected_theme = random.choice(greeting_themes)
+print(f"  └ [朝のテーマ選定] {selected_theme}", flush=True)
+
+
+
 
 # タイムゾーン定義
 JST = timezone(timedelta(hours=9))
