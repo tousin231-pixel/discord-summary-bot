@@ -27,11 +27,11 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 # --- 調整可能なパラメータ・定数 ---
 # タイムアウト・リトライ設定
 HTTP_TIMEOUT = (6.0, 20.0)
-GEMINI_HTTP_TIMEOUT_MS = 180000  # Geminiクライアントのタイムアウト (ミリ秒)
-GEMINI_TOTAL_TIMEOUT_SEC = 900  # Gemini処理全体の制限時間 (秒)
-MAX_RETRIES_PER_MODEL = 3       # モデルごとの最大リトライ回数
-RETRY_WAIT_SEC = 5              # 503エラー時などのリトライ待機秒数
-RATE_LIMIT_WAIT_SEC = 10        # 429 RateLimit発生時の待機秒数
+GEMINI_HTTP_TIMEOUT_MS = 240000  # Geminiクライアントのタイムアウト (ミリ秒)
+GEMINI_TOTAL_TIMEOUT_SEC = 2400  # Gemini処理全体の制限時間 (秒)
+MAX_RETRIES_PER_MODEL = 8       # モデルごとの最大リトライ回数
+RETRY_WAIT_SEC = 15              # 503エラー時などのリトライ待機秒数
+RATE_LIMIT_WAIT_SEC = 20        # 429 RateLimit発生時の待機秒数
 
 # Discordメッセージ・取得制限設定
 DISCORD_MAX_LENGTH = 1800       # Discordの文字制限（分割サイズ）※ディスコードに一度にかける文字数は2000文字
@@ -79,9 +79,9 @@ CHANNELS = {
 
 # 軽量モデル優先
 LIGHT_GEMINI_MODELS = [
+    "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-3.6-flash",
 ]
 
 # しっかりしたモデル優先
